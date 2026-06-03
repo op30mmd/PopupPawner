@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Blocked Text Patterns (comma separated):"
+        android:textStyle="bold" />
+
+    <EditText
+        android:id="@+id/patterns_edit"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="e.g. update,rating,survey"
+        android:inputType="textMultiLine"
+        android:minLines="3" />
+
+    <Button
+        android:id="@+id/save_button"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="Save Patterns" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="32dp"
+        android:text="Note: Module must be enabled in LSPosed. Some apps may require a restart for changes to take effect."
+        android:textSize="12sp" />
+
+</LinearLayout>
