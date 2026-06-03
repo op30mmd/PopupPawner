@@ -8,7 +8,6 @@ import android.view.ViewGroup;
 import android.widget.PopupWindow;
 import android.widget.TextView;
 import io.github.libxposed.api.XposedInterface;
-import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
 import java.lang.reflect.Method;
@@ -16,7 +15,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
-public class PopupBlockerModule extends XposedModule {
+public class PopupBlockerModule implements XposedModuleInterface {
 
     private static final String PREFS_NAME = "popup_blocker_prefs";
     private static final String KEY_PATTERNS = "blocked_patterns";
@@ -26,19 +25,16 @@ public class PopupBlockerModule extends XposedModule {
 
     private final XposedInterface mFramework;
 
-    public PopupBlockerModule(XposedInterface base, XposedModuleInterface.ModuleLoadedParam param) {
-        super();
+    public PopupBlockerModule(XposedInterface base, ModuleLoadedParam param) {
         this.mFramework = base;
-        try {
-            attachFramework(base);
-        } catch (Throwable ignored) {
-            // Fallback for environments where attachFramework is missing
-        }
+    }
+
+    public void attachFramework(XposedInterface base) {
+        // Satisfaction for potential reflection-based calls
     }
 
     @Override
-    public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
-        super.onPackageLoaded(param);
+    public void onPackageLoaded(PackageLoadedParam param) {
         if (mFramework == null) return;
         if (param.getPackageName().equals("com.example.popupblocker")) {
             return;
