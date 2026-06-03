@@ -25,7 +25,7 @@ public class PopupBlockerModule implements XposedModuleInterface {
 
     private final XposedInterface mFramework;
 
-    public PopupBlockerModule(XposedInterface base, ModuleLoadedParam param) {
+    public PopupBlockerModule(XposedInterface base, XposedModuleInterface.ModuleLoadedParam param) {
         this.mFramework = base;
     }
 
@@ -34,7 +34,7 @@ public class PopupBlockerModule implements XposedModuleInterface {
     }
 
     @Override
-    public void onPackageLoaded(PackageLoadedParam param) {
+    public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
         if (mFramework == null) return;
         if (param.getPackageName().equals("com.example.popupblocker")) {
             return;
