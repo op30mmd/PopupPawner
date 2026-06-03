@@ -24,14 +24,22 @@ public class PopupBlockerModule extends XposedModule {
             "update", "rating", "survey", "ad", "commercial", "promotion"
     ));
 
+    private final XposedInterface mFramework;
+
     public PopupBlockerModule(XposedInterface base, XposedModuleInterface.ModuleLoadedParam param) {
         super();
-        attachFramework(base);
+        this.mFramework = base;
+        try {
+            attachFramework(base);
+        } catch (Throwable ignored) {
+            // Fallback for environments where attachFramework is missing
+        }
     }
 
     @Override
     public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
         super.onPackageLoaded(param);
+        if (mFramework == null) return;
         if (param.getPackageName().equals("com.example.popupblocker")) {
             return;
         }
@@ -47,9 +55,9 @@ public class PopupBlockerModule extends XposedModule {
             try {
                 Class<?> dialogClass = classLoader.loadClass("android.app.Dialog");
                 Method showDialog = dialogClass.getDeclaredMethod("show");
-                hook(showDialog).intercept(chain -> {
+                mFramework.hook(showDialog).intercept(chain -> {
                     if (shouldBlockDialog((Dialog) chain.getThisObject())) {
-                        log(4, "PopupBlocker", "Blocked Dialog in " + param.getPackageName());
+                        mFramework.log(4, "PopupBlocker", "Blocked Dialog in " + param.getPackageName());
                         return null;
                     }
                     return chain.proceed();
@@ -63,36 +71,36 @@ public class PopupBlockerModule extends XposedModule {
                 Class<?> popupClass = classLoader.loadClass("android.widget.PopupWindow");
 
                 Class<?>[] showAsDropDown1Args = {View.class};
-                hook(popupClass.getDeclaredMethod("showAsDropDown", showAsDropDown1Args)).intercept(chain -> {
+                mFramework.hook(popupClass.getDeclaredMethod("showAsDropDown", showAsDropDown1Args)).intercept(chain -> {
                     if (shouldBlockPopupWindow((PopupWindow) chain.getThisObject())) {
-                        log(4, "PopupBlocker", "Blocked PopupWindow (dropdown) in " + param.getPackageName());
+                        mFramework.log(4, "PopupBlocker", "Blocked PopupWindow (dropdown) in " + param.getPackageName());
                         return null;
                     }
                     return chain.proceed();
                 });
 
                 Class<?>[] showAsDropDown2Args = {View.class, int.class, int.class};
-                hook(popupClass.getDeclaredMethod("showAsDropDown", showAsDropDown2Args)).intercept(chain -> {
+                mFramework.hook(popupClass.getDeclaredMethod("showAsDropDown", showAsDropDown2Args)).intercept(chain -> {
                     if (shouldBlockPopupWindow((PopupWindow) chain.getThisObject())) {
-                        log(4, "PopupBlocker", "Blocked PopupWindow (dropdown offset) in " + param.getPackageName());
+                        mFramework.log(4, "PopupBlocker", "Blocked PopupWindow (dropdown offset) in " + param.getPackageName());
                         return null;
                     }
                     return chain.proceed();
                 });
 
                 Class<?>[] showAsDropDown3Args = {View.class, int.class, int.class, int.class};
-                hook(popupClass.getDeclaredMethod("showAsDropDown", showAsDropDown3Args)).intercept(chain -> {
+                mFramework.hook(popupClass.getDeclaredMethod("showAsDropDown", showAsDropDown3Args)).intercept(chain -> {
                     if (shouldBlockPopupWindow((PopupWindow) chain.getThisObject())) {
-                        log(4, "PopupBlocker", "Blocked PopupWindow (dropdown gravity) in " + param.getPackageName());
+                        mFramework.log(4, "PopupBlocker", "Blocked PopupWindow (dropdown gravity) in " + param.getPackageName());
                         return null;
                     }
                     return chain.proceed();
                 });
 
                 Class<?>[] showAtLocationArgs = {View.class, int.class, int.class, int.class};
-                hook(popupClass.getDeclaredMethod("showAtLocation", showAtLocationArgs)).intercept(chain -> {
+                mFramework.hook(popupClass.getDeclaredMethod("showAtLocation", showAtLocationArgs)).intercept(chain -> {
                     if (shouldBlockPopupWindow((PopupWindow) chain.getThisObject())) {
-                        log(4, "PopupBlocker", "Blocked PopupWindow (location) in " + param.getPackageName());
+                        mFramework.log(4, "PopupBlocker", "Blocked PopupWindow (location) in " + param.getPackageName());
                         return null;
                     }
                     return chain.proceed();
@@ -145,7 +153,7 @@ public class PopupBlockerModule extends XposedModule {
 
     private Set<String> getPatterns() {
         try {
-            SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
+            SharedPreferences prefs = mFramework.getRemotePreferences(PREFS_NAME);
             return prefs.getStringSet(KEY_PATTERNS, DEFAULT_PATTERNS);
         } catch (Exception e) {
             return DEFAULT_PATTERNS;
