@@ -7,6 +7,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.PopupWindow;
 import android.widget.TextView;
+import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
@@ -23,8 +24,9 @@ public class PopupBlockerModule extends XposedModule {
             "update", "rating", "survey", "ad", "commercial", "promotion"
     ));
 
-    public PopupBlockerModule() {
+    public PopupBlockerModule(XposedInterface base, XposedModuleInterface.ModuleLoadedParam param) {
         super();
+        attachFramework(base);
     }
 
     @Override
