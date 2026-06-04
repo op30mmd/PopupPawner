@@ -9,14 +9,17 @@ import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityNodeProvider;
 import android.widget.TextView;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 public class PopupBlockerModule extends XposedModule {
@@ -102,7 +105,6 @@ public class PopupBlockerModule extends XposedModule {
                     Object result = chain.proceed();
 
                     if (window != null) {
-                        // For Dialogs, we treat 'null' params as a signal to check aggressive mode
                         String match = checkBlock(window.getDecorView(), null, true);
                         if (match != null) {
                             log(4, TAG, "Blocked Dialog in " + pkgName + ". " + match);
@@ -125,7 +127,6 @@ public class PopupBlockerModule extends XposedModule {
                     Activity activity = (Activity) chain.getThisObject();
                     Object result = chain.proceed();
 
-                    // NEVER trigger aggressive mode on generic Activity resume (would break the phone)
                     String match = checkBlock(activity.getWindow().getDecorView(), null, false);
                     if (match != null) {
                         log(4, TAG, "Blocked Activity popup in " + pkgName + ". " + match);
@@ -146,7 +147,6 @@ public class PopupBlockerModule extends XposedModule {
         if (view == null) return null;
         SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
 
-        // Aggressive mode logic: only block if it's a sub-window or explicit dialog
         if (prefs.getBoolean(KEY_AGGRESSIVE, false)) {
             if (isExplicitDialog) {
                 return "Aggressive mode (Dialog)";
@@ -161,39 +161,49 @@ public class PopupBlockerModule extends XposedModule {
     }
 
     private String findBlockedText(View view, Set<String> patterns) {
-        AccessibilityNodeInfo nodeInfo = view.createAccessibilityNodeInfo();
-        if (nodeInfo != null) {
-            String match = searchNodeRecursive(nodeInfo, patterns);
-            nodeInfo.recycle();
-            return match;
+        if (view == null) return null;
+
+        // 1. STANDARD ANDROID SEARCH
+        ArrayList<View> outViews = new ArrayList<>();
+        for (String pattern : patterns) {
+            view.findViewsWithText(outViews, pattern, 1); // FIND_VIEWS_WITH_TEXT
+            if (!outViews.isEmpty()) return "Text match: " + pattern;
+
+            view.findViewsWithText(outViews, pattern, 2); // FIND_VIEWS_WITH_CONTENT_DESCRIPTION
+            if (!outViews.isEmpty()) return "Description match: " + pattern;
         }
-        return null;
+
+        // 2. VIRTUAL TREE SEARCH (Compose, Flutter)
+        AccessibilityNodeProvider provider = view.getAccessibilityNodeProvider();
+        if (provider != null) {
+            for (String pattern : patterns) {
+                try {
+                    List<AccessibilityNodeInfo> nodes = provider.findAccessibilityNodeInfosByText(pattern, -1);
+                    if (nodes != null && !nodes.isEmpty()) {
+                        return "Virtual tree match: " + pattern;
+                    }
+                } catch (Throwable ignored) {}
+            }
+        }
+
+        // 3. FALLBACK
+        return findBlockedTextRecursive(view, patterns);
     }
 
-    private String searchNodeRecursive(AccessibilityNodeInfo node, Set<String> patterns) {
-        if (node == null) return null;
-
-        CharSequence textObj = node.getText();
-        if (textObj != null) {
-            String text = textObj.toString().toLowerCase();
-            for (String p : patterns) {
-                if (text.contains(p.toLowerCase())) return "Text match: " + p;
+    private String findBlockedTextRecursive(View view, Set<String> patterns) {
+        if (view instanceof TextView) {
+            CharSequence text = ((TextView) view).getText();
+            if (text != null) {
+                for (String p : patterns) {
+                    if (text.toString().toLowerCase().contains(p.toLowerCase())) return "Recursive text match: " + p;
+                }
             }
         }
 
-        CharSequence descObj = node.getContentDescription();
-        if (descObj != null) {
-            String desc = descObj.toString().toLowerCase();
-            for (String p : patterns) {
-                if (desc.contains(p.toLowerCase())) return "Description match: " + p;
-            }
-        }
-
-        for (int i = 0; i < node.getChildCount(); i++) {
-            AccessibilityNodeInfo child = node.getChild(i);
-            if (child != null) {
-                String match = searchNodeRecursive(child, patterns);
-                child.recycle();
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                String match = findBlockedTextRecursive(group.getChildAt(i), patterns);
                 if (match != null) return match;
             }
         }
