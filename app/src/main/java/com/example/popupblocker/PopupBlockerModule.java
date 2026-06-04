@@ -8,6 +8,7 @@ import android.view.ViewGroup;
 import android.widget.PopupWindow;
 import android.widget.TextView;
 import io.github.libxposed.api.XposedInterface;
+import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
 import java.lang.reflect.Method;
@@ -15,7 +16,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
-public class PopupBlockerModule implements XposedModuleInterface {
+public class PopupBlockerModule extends XposedModule {
 
     private static final String TAG = "PopupBlocker";
     private static final String PREFS_NAME = "popup_blocker_prefs";
@@ -24,30 +25,25 @@ public class PopupBlockerModule implements XposedModuleInterface {
             "update", "rating", "survey", "ad", "commercial", "promotion"
     ));
 
-    private final XposedInterface mFramework;
-
-    public PopupBlockerModule(XposedInterface base, ModuleLoadedParam param) {
-        this.mFramework = base;
-        mFramework.log(4, TAG, "Module instantiated in process: " + param.getProcessName());
-    }
-
-    public void attachFramework(XposedInterface base) {
-        // Satisfy potential reflection-based framework calls
+    public PopupBlockerModule(XposedInterface base, XposedModuleInterface.ModuleLoadedParam param) {
+        super();
+        attachFramework(base);
+        log(4, TAG, "Module instantiated in process: " + param.getProcessName());
     }
 
     @Override
-    public void onPackageLoaded(PackageLoadedParam param) {
-        if (mFramework == null) return;
+    public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
+        super.onPackageLoaded(param);
         String pkgName = param.getPackageName();
-        mFramework.log(4, TAG, "onPackageLoaded: " + pkgName);
+        log(4, TAG, "onPackageLoaded: " + pkgName);
 
         if (pkgName.equals("com.example.popupblocker")) {
-            mFramework.log(4, TAG, "Skipping own package: " + pkgName);
+            log(4, TAG, "Skipping own package: " + pkgName);
             return;
         }
 
         if ((param.getApplicationInfo().flags & ApplicationInfo.FLAG_SYSTEM) != 0) {
-            mFramework.log(4, TAG, "Skipping system package: " + pkgName);
+            log(4, TAG, "Skipping system package: " + pkgName);
             return;
         }
 
@@ -58,16 +54,16 @@ public class PopupBlockerModule implements XposedModuleInterface {
             try {
                 Class<?> dialogClass = classLoader.loadClass("android.app.Dialog");
                 Method showDialog = dialogClass.getDeclaredMethod("show");
-                mFramework.hook(showDialog).intercept(chain -> {
+                hook(showDialog).intercept(chain -> {
                     if (shouldBlockDialog((Dialog) chain.getThisObject(), pkgName)) {
-                        mFramework.log(4, TAG, "Blocked Dialog in " + pkgName);
+                        log(4, TAG, "Blocked Dialog in " + pkgName);
                         return null;
                     }
                     return chain.proceed();
                 });
-                mFramework.log(4, TAG, "Successfully hooked Dialog.show() in " + pkgName);
+                log(4, TAG, "Successfully hooked Dialog.show() in " + pkgName);
             } catch (NoSuchMethodException | ClassNotFoundException e) {
-                mFramework.log(4, TAG, "Failed to hook Dialog.show() in " + pkgName + ": " + e.getMessage());
+                log(4, TAG, "Failed to hook Dialog.show() in " + pkgName + ": " + e.getMessage());
             }
 
             // Hook PopupWindow methods
@@ -75,59 +71,59 @@ public class PopupBlockerModule implements XposedModuleInterface {
                 Class<?> popupClass = classLoader.loadClass("android.widget.PopupWindow");
 
                 Class<?>[] showAsDropDown1Args = {View.class};
-                mFramework.hook(popupClass.getDeclaredMethod("showAsDropDown", showAsDropDown1Args)).intercept(chain -> {
+                hook(popupClass.getDeclaredMethod("showAsDropDown", showAsDropDown1Args)).intercept(chain -> {
                     if (shouldBlockPopupWindow((PopupWindow) chain.getThisObject(), pkgName)) {
-                        mFramework.log(4, TAG, "Blocked PopupWindow (dropdown) in " + pkgName);
+                        log(4, TAG, "Blocked PopupWindow (dropdown) in " + pkgName);
                         return null;
                     }
                     return chain.proceed();
                 });
 
                 Class<?>[] showAsDropDown2Args = {View.class, int.class, int.class};
-                mFramework.hook(popupClass.getDeclaredMethod("showAsDropDown", showAsDropDown2Args)).intercept(chain -> {
+                hook(popupClass.getDeclaredMethod("showAsDropDown", showAsDropDown2Args)).intercept(chain -> {
                     if (shouldBlockPopupWindow((PopupWindow) chain.getThisObject(), pkgName)) {
-                        mFramework.log(4, TAG, "Blocked PopupWindow (dropdown offset) in " + pkgName);
+                        log(4, TAG, "Blocked PopupWindow (dropdown offset) in " + pkgName);
                         return null;
                     }
                     return chain.proceed();
                 });
 
                 Class<?>[] showAsDropDown3Args = {View.class, int.class, int.class, int.class};
-                mFramework.hook(popupClass.getDeclaredMethod("showAsDropDown", showAsDropDown3Args)).intercept(chain -> {
+                hook(popupClass.getDeclaredMethod("showAsDropDown", showAsDropDown3Args)).intercept(chain -> {
                     if (shouldBlockPopupWindow((PopupWindow) chain.getThisObject(), pkgName)) {
-                        mFramework.log(4, TAG, "Blocked PopupWindow (dropdown gravity) in " + pkgName);
+                        log(4, TAG, "Blocked PopupWindow (dropdown gravity) in " + pkgName);
                         return null;
                     }
                     return chain.proceed();
                 });
 
                 Class<?>[] showAtLocationArgs = {View.class, int.class, int.class, int.class};
-                mFramework.hook(popupClass.getDeclaredMethod("showAtLocation", showAtLocationArgs)).intercept(chain -> {
+                hook(popupClass.getDeclaredMethod("showAtLocation", showAtLocationArgs)).intercept(chain -> {
                     if (shouldBlockPopupWindow((PopupWindow) chain.getThisObject(), pkgName)) {
-                        mFramework.log(4, TAG, "Blocked PopupWindow (location) in " + pkgName);
+                        log(4, TAG, "Blocked PopupWindow (location) in " + pkgName);
                         return null;
                     }
                     return chain.proceed();
                 });
-                mFramework.log(4, TAG, "Successfully hooked PopupWindow methods in " + pkgName);
+                log(4, TAG, "Successfully hooked PopupWindow methods in " + pkgName);
             } catch (NoSuchMethodException | ClassNotFoundException e) {
-                mFramework.log(4, TAG, "Failed to hook PopupWindow methods in " + pkgName + ": " + e.getMessage());
+                log(4, TAG, "Failed to hook PopupWindow methods in " + pkgName + ": " + e.getMessage());
             }
 
         } catch (Exception e) {
-            mFramework.log(4, TAG, "Unexpected error in onPackageLoaded for " + pkgName + ": " + e.getMessage());
+            log(4, TAG, "Unexpected error in onPackageLoaded for " + pkgName + ": " + e.getMessage());
         }
     }
 
     private boolean shouldBlockDialog(Dialog dialog, String pkgName) {
         if (dialog == null || dialog.getWindow() == null) return false;
-        mFramework.log(4, TAG, "Checking Dialog in " + pkgName);
+        log(4, TAG, "Checking Dialog in " + pkgName);
         return findBlockedText(dialog.getWindow().getDecorView(), pkgName);
     }
 
     private boolean shouldBlockPopupWindow(PopupWindow popupWindow, String pkgName) {
         if (popupWindow == null || popupWindow.getContentView() == null) return false;
-        mFramework.log(4, TAG, "Checking PopupWindow in " + pkgName);
+        log(4, TAG, "Checking PopupWindow in " + pkgName);
         return findBlockedText(popupWindow.getContentView(), pkgName);
     }
 
@@ -143,7 +139,7 @@ public class PopupBlockerModule implements XposedModuleInterface {
                 String text = textObj.toString().toLowerCase();
                 for (String pattern : patterns) {
                     if (text.contains(pattern.toLowerCase())) {
-                        mFramework.log(4, TAG, "Match found! Pattern: '" + pattern + "' in text: '" + text + "' (Package: " + pkgName + ")");
+                        log(4, TAG, "Match found! Pattern: '" + pattern + "' in text: '" + text + "' (Package: " + pkgName + ")");
                         return true;
                     }
                 }
@@ -161,12 +157,12 @@ public class PopupBlockerModule implements XposedModuleInterface {
 
     private Set<String> getPatterns() {
         try {
-            SharedPreferences prefs = mFramework.getRemotePreferences(PREFS_NAME);
+            SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
             Set<String> patterns = prefs.getStringSet(KEY_PATTERNS, DEFAULT_PATTERNS);
-            mFramework.log(4, TAG, "Loaded " + patterns.size() + " patterns");
+            log(4, TAG, "Loaded " + patterns.size() + " patterns");
             return patterns;
         } catch (Exception e) {
-            mFramework.log(4, TAG, "Error loading patterns, using defaults: " + e.getMessage());
+            log(4, TAG, "Error loading patterns, using defaults: " + e.getMessage());
             return DEFAULT_PATTERNS;
         }
     }
