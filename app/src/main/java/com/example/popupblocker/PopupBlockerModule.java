@@ -2,9 +2,9 @@ package com.example.popupblocker;
 
 import android.app.Dialog;
 import android.content.SharedPreferences;
-import android.content.pm.ApplicationInfo;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
 import android.view.WindowManager;
 import android.widget.PopupWindow;
 import android.widget.TextView;
@@ -34,83 +34,80 @@ public class PopupBlockerModule extends XposedModule {
     public PopupBlockerModule(XposedInterface base, XposedModuleInterface.ModuleLoadedParam param) {
         super();
         attachFramework(base);
-        log(4, TAG, "Module instantiated in process: " + param.getProcessName());
     }
 
     @Override
     public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
         super.onPackageLoaded(param);
         String pkgName = param.getPackageName();
-        log(4, TAG, "onPackageLoaded: " + pkgName);
 
         if (pkgName.equals("com.example.popupblocker")) {
             return;
         }
 
-        // We don't skip system packages anymore to be as broad as possible as requested
-        // but we still want to avoid critical system UI if possible.
-        // For now, let's keep it broad.
-
         try {
             ClassLoader classLoader = param.getDefaultClassLoader();
 
-            // Hook WindowManagerImpl.addView - very broad
+            // Hook WindowManagerImpl.addView
             try {
                 Class<?> wmClass = classLoader.loadClass("android.view.WindowManagerImpl");
                 Method addView = wmClass.getDeclaredMethod("addView", View.class, ViewGroup.LayoutParams.class);
                 hook(addView).intercept(chain -> {
                     View view = (View) chain.getArgs().get(0);
                     ViewGroup.LayoutParams params = (ViewGroup.LayoutParams) chain.getArgs().get(1);
-                    String match = checkBlock(view, params, pkgName);
+                    String match = checkBlock(view, params);
                     if (match != null) {
                         log(4, TAG, "Blocked View addition in " + pkgName + ". Match: " + match);
                         return null;
                     }
                     return chain.proceed();
                 });
-                log(4, TAG, "Successfully hooked WindowManagerImpl.addView in " + pkgName);
             } catch (NoSuchMethodException | ClassNotFoundException e) {
-                log(4, TAG, "Failed to hook WindowManagerImpl.addView in " + pkgName + ": " + e.getMessage());
+                log(4, TAG, "Failed to hook addView: " + e.getMessage());
             }
 
-            // Hook Dialog.show()
+            // Hook Dialog.show() with lifecycle fix
             try {
                 Class<?> dialogClass = classLoader.loadClass("android.app.Dialog");
                 Method showDialog = dialogClass.getDeclaredMethod("show");
                 hook(showDialog).intercept(chain -> {
                     Dialog dialog = (Dialog) chain.getThisObject();
-                    String match = checkBlock(dialog.getWindow().getDecorView(), null, pkgName);
-                    if (match != null) {
-                        log(4, TAG, "Blocked Dialog.show() in " + pkgName + ". Match: " + match);
-                        return null;
+                    Window window = dialog.getWindow();
+
+                    if (window != null) {
+                        window.getDecorView().setAlpha(0f);
                     }
-                    return chain.proceed();
+
+                    Object result = chain.proceed();
+
+                    String match = checkBlock(dialog.getWindow().getDecorView(), null);
+                    if (match != null) {
+                        log(4, TAG, "Blocked Dialog in " + pkgName + ". Match: " + match);
+                        dialog.dismiss();
+                    } else if (window != null) {
+                        window.getDecorView().setAlpha(1f);
+                    }
+
+                    return result;
                 });
-                log(4, TAG, "Successfully hooked Dialog.show() in " + pkgName);
             } catch (NoSuchMethodException | ClassNotFoundException e) {
-                log(4, TAG, "Failed to hook Dialog.show() in " + pkgName + ": " + e.getMessage());
+                log(4, TAG, "Failed to hook Dialog.show(): " + e.getMessage());
             }
 
         } catch (Exception e) {
-            log(4, TAG, "Unexpected error in onPackageLoaded for " + pkgName + ": " + e.getMessage());
+            log(4, TAG, "Error in onPackageLoaded: " + e.getMessage());
         }
     }
 
-    private String checkBlock(View view, ViewGroup.LayoutParams params, String pkgName) {
+    private String checkBlock(View view, ViewGroup.LayoutParams params) {
         if (view == null) return null;
         SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
 
-        boolean aggressive = prefs.getBoolean(KEY_AGGRESSIVE, false);
-        if (aggressive) {
+        if (prefs.getBoolean(KEY_AGGRESSIVE, false)) {
             if (params instanceof WindowManager.LayoutParams) {
                 int type = ((WindowManager.LayoutParams) params).type;
-                // Sub-windows (dialogs, panels, etc) are usually >= 1000
-                // Application windows are usually 1-99
-                if (type >= 1000) {
-                    return "Aggressive mode (Window Type: " + type + ")";
-                }
+                if (type >= 1000) return "Aggressive mode (Type " + type + ")";
             } else if (params == null) {
-                // For Dialog.show() where we might not have the params yet in our hook
                 return "Aggressive mode (Dialog)";
             }
         }
@@ -121,23 +118,21 @@ public class PopupBlockerModule extends XposedModule {
 
     private String findBlockedTextRecursive(View view, Set<String> patterns) {
         if (view instanceof TextView) {
-            CharSequence textObj = ((TextView) view).getText();
-            if (textObj != null) {
-                String text = textObj.toString().toLowerCase();
-                for (String pattern : patterns) {
-                    if (text.contains(pattern.toLowerCase())) {
-                        return "Text: '" + text + "' matched pattern: '" + pattern + "'";
+            CharSequence text = ((TextView) view).getText();
+            if (text != null) {
+                for (String p : patterns) {
+                    if (text.toString().toLowerCase().contains(p.toLowerCase())) {
+                        return "Text match: " + p;
                     }
                 }
             }
         }
 
-        CharSequence descObj = view.getContentDescription();
-        if (descObj != null) {
-            String desc = descObj.toString().toLowerCase();
-            for (String pattern : patterns) {
-                if (desc.contains(pattern.toLowerCase())) {
-                    return "ContentDescription: '" + desc + "' matched pattern: '" + pattern + "'";
+        CharSequence desc = view.getContentDescription();
+        if (desc != null) {
+            for (String p : patterns) {
+                if (desc.toString().toLowerCase().contains(p.toLowerCase())) {
+                    return "Description match: " + p;
                 }
             }
         }
@@ -146,9 +141,7 @@ public class PopupBlockerModule extends XposedModule {
             ViewGroup group = (ViewGroup) view;
             for (int i = 0; i < group.getChildCount(); i++) {
                 String match = findBlockedTextRecursive(group.getChildAt(i), patterns);
-                if (match != null) {
-                    return match;
-                }
+                if (match != null) return match;
             }
         }
         return null;
