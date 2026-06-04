@@ -25,6 +25,10 @@ public class PopupBlockerModule extends XposedModule {
             "update", "rating", "survey", "ad", "commercial", "promotion"
     ));
 
+    public PopupBlockerModule() {
+        super();
+    }
+
     public PopupBlockerModule(XposedInterface base, XposedModuleInterface.ModuleLoadedParam param) {
         super();
         attachFramework(base);
