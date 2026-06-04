@@ -14,7 +14,7 @@
             android:value="Blocks annoying hardcoded popups" />
         <meta-data
             android:name="xposedminversion"
-            android:value="100" />
+            android:value="101" />
 
         <activity android:name=".SettingsActivity"
             android:exported="true">
