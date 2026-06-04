@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.Toast;
 
@@ -16,8 +17,10 @@ public class SettingsActivity extends Activity {
 
     private static final String PREFS_NAME = "popup_blocker_prefs";
     private static final String KEY_PATTERNS = "blocked_patterns";
+    private static final String KEY_AGGRESSIVE = "aggressive_mode";
 
     private EditText patternsEdit;
+    private CheckBox aggressiveCheckbox;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -25,10 +28,12 @@ public class SettingsActivity extends Activity {
         setContentView(R.layout.activity_settings);
 
         patternsEdit = findViewById(R.id.patterns_edit);
+        aggressiveCheckbox = findViewById(R.id.aggressive_checkbox);
         Button saveButton = findViewById(R.id.save_button);
 
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         Set<String> patterns = prefs.getStringSet(KEY_PATTERNS, new HashSet<>(Arrays.asList("update", "rating", "survey")));
+        boolean aggressive = prefs.getBoolean(KEY_AGGRESSIVE, false);
 
         StringBuilder sb = new StringBuilder();
         for (String s : patterns) {
@@ -36,6 +41,7 @@ public class SettingsActivity extends Activity {
             sb.append(s);
         }
         patternsEdit.setText(sb.toString());
+        aggressiveCheckbox.setChecked(aggressive);
 
         saveButton.setOnClickListener(v -> {
             String input = patternsEdit.getText().toString();
@@ -48,8 +54,11 @@ public class SettingsActivity extends Activity {
                 }
             }
 
-            prefs.edit().putStringSet(KEY_PATTERNS, newPatterns).apply();
-            Toast.makeText(this, "Patterns saved", Toast.LENGTH_SHORT).show();
+            prefs.edit()
+                    .putStringSet(KEY_PATTERNS, newPatterns)
+                    .putBoolean(KEY_AGGRESSIVE, aggressiveCheckbox.isChecked())
+                    .apply();
+            Toast.makeText(this, "Settings saved", Toast.LENGTH_SHORT).show();
         });
     }
 }

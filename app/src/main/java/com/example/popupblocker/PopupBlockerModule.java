@@ -21,6 +21,7 @@ public class PopupBlockerModule extends XposedModule {
     private static final String TAG = "PopupBlocker";
     private static final String PREFS_NAME = "popup_blocker_prefs";
     private static final String KEY_PATTERNS = "blocked_patterns";
+    private static final String KEY_AGGRESSIVE = "aggressive_mode";
     private static final Set<String> DEFAULT_PATTERNS = new HashSet<>(Arrays.asList(
             "update", "rating", "survey", "ad", "commercial", "promotion"
     ));
@@ -59,9 +60,9 @@ public class PopupBlockerModule extends XposedModule {
                 Class<?> dialogClass = classLoader.loadClass("android.app.Dialog");
                 Method showDialog = dialogClass.getDeclaredMethod("show");
                 hook(showDialog).intercept(chain -> {
-                    String match = findBlockedText(shouldBlockDialog((Dialog) chain.getThisObject()));
+                    String match = checkBlock(shouldBlockDialog((Dialog) chain.getThisObject()));
                     if (match != null) {
-                        log(4, TAG, "Blocked Dialog in " + pkgName + ". Match details: " + match);
+                        log(4, TAG, "Blocked Dialog in " + pkgName + ". " + match);
                         return null;
                     }
                     return chain.proceed();
@@ -77,9 +78,9 @@ public class PopupBlockerModule extends XposedModule {
 
                 Class<?>[] showAsDropDown1Args = {View.class};
                 hook(popupClass.getDeclaredMethod("showAsDropDown", showAsDropDown1Args)).intercept(chain -> {
-                    String match = findBlockedText(shouldBlockPopupWindow((PopupWindow) chain.getThisObject()));
+                    String match = checkBlock(shouldBlockPopupWindow((PopupWindow) chain.getThisObject()));
                     if (match != null) {
-                        log(4, TAG, "Blocked PopupWindow (dropdown) in " + pkgName + ". Match details: " + match);
+                        log(4, TAG, "Blocked PopupWindow (dropdown) in " + pkgName + ". " + match);
                         return null;
                     }
                     return chain.proceed();
@@ -87,9 +88,9 @@ public class PopupBlockerModule extends XposedModule {
 
                 Class<?>[] showAsDropDown2Args = {View.class, int.class, int.class};
                 hook(popupClass.getDeclaredMethod("showAsDropDown", showAsDropDown2Args)).intercept(chain -> {
-                    String match = findBlockedText(shouldBlockPopupWindow((PopupWindow) chain.getThisObject()));
+                    String match = checkBlock(shouldBlockPopupWindow((PopupWindow) chain.getThisObject()));
                     if (match != null) {
-                        log(4, TAG, "Blocked PopupWindow (dropdown offset) in " + pkgName + ". Match details: " + match);
+                        log(4, TAG, "Blocked PopupWindow (dropdown offset) in " + pkgName + ". " + match);
                         return null;
                     }
                     return chain.proceed();
@@ -97,9 +98,9 @@ public class PopupBlockerModule extends XposedModule {
 
                 Class<?>[] showAsDropDown3Args = {View.class, int.class, int.class, int.class};
                 hook(popupClass.getDeclaredMethod("showAsDropDown", showAsDropDown3Args)).intercept(chain -> {
-                    String match = findBlockedText(shouldBlockPopupWindow((PopupWindow) chain.getThisObject()));
+                    String match = checkBlock(shouldBlockPopupWindow((PopupWindow) chain.getThisObject()));
                     if (match != null) {
-                        log(4, TAG, "Blocked PopupWindow (dropdown gravity) in " + pkgName + ". Match details: " + match);
+                        log(4, TAG, "Blocked PopupWindow (dropdown gravity) in " + pkgName + ". " + match);
                         return null;
                     }
                     return chain.proceed();
@@ -107,9 +108,9 @@ public class PopupBlockerModule extends XposedModule {
 
                 Class<?>[] showAtLocationArgs = {View.class, int.class, int.class, int.class};
                 hook(popupClass.getDeclaredMethod("showAtLocation", showAtLocationArgs)).intercept(chain -> {
-                    String match = findBlockedText(shouldBlockPopupWindow((PopupWindow) chain.getThisObject()));
+                    String match = checkBlock(shouldBlockPopupWindow((PopupWindow) chain.getThisObject()));
                     if (match != null) {
-                        log(4, TAG, "Blocked PopupWindow (location) in " + pkgName + ". Match details: " + match);
+                        log(4, TAG, "Blocked PopupWindow (location) in " + pkgName + ". " + match);
                         return null;
                     }
                     return chain.proceed();
@@ -134,9 +135,13 @@ public class PopupBlockerModule extends XposedModule {
         return popupWindow.getContentView();
     }
 
-    private String findBlockedText(View view) {
+    private String checkBlock(View view) {
         if (view == null) return null;
-        Set<String> patterns = getPatterns();
+        SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
+        if (prefs.getBoolean(KEY_AGGRESSIVE, false)) {
+            return "Aggressive mode matched";
+        }
+        Set<String> patterns = prefs.getStringSet(KEY_PATTERNS, DEFAULT_PATTERNS);
         return findBlockedTextRecursive(view, patterns);
     }
 
@@ -161,15 +166,5 @@ public class PopupBlockerModule extends XposedModule {
             }
         }
         return null;
-    }
-
-    private Set<String> getPatterns() {
-        try {
-            SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
-            Set<String> patterns = prefs.getStringSet(KEY_PATTERNS, DEFAULT_PATTERNS);
-            return patterns;
-        } catch (Exception e) {
-            return DEFAULT_PATTERNS;
-        }
     }
 }
