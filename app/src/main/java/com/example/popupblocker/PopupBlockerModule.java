@@ -40,16 +40,19 @@ public class PopupBlockerModule extends XposedModule {
             "save", "login", "search"
     ));
 
-    public PopupBlockerModule(XposedInterface base, XposedModuleInterface.ModuleLoadedParam param) {
+    /**
+     * No-argument constructor required by LibXposed (v101.0.1) for reflective instantiation.
+     * Note: A 2-argument constructor (XposedInterface, ModuleLoadedParam) is not supported
+     * by the superclass in this API version and causes compilation errors.
+     */
+    public PopupBlockerModule() {
         super();
-        attachFramework(base);
-        log(4, TAG, "Module instantiated in " + param.getProcessName());
     }
 
     @Override
     public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
         super.onModuleLoaded(param);
-        log(4, TAG, "onModuleLoaded in " + param.getProcessName());
+        log(4, TAG, "Module loaded in " + param.getProcessName());
     }
 
     @Override
