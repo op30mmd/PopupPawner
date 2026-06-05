@@ -10,6 +10,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
+import android.widget.PopupWindow;
 import android.widget.TextView;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
@@ -62,102 +63,103 @@ public class PopupBlockerModule extends XposedModule {
             ClassLoader classLoader = param.getDefaultClassLoader();
             installWindowDiagnostics(classLoader, pkgName);
 
-            // Hook WindowManagerImpl.addView - catch all window types (Compose, Popups, etc)
-            try {
-                Class<?> wmClass = classLoader.loadClass("android.view.WindowManagerImpl");
-                Method addView = wmClass.getDeclaredMethod("addView", View.class, ViewGroup.LayoutParams.class);
-                hook(addView).intercept(chain -> {
-                    View view = (View) chain.getArg(0);
-                    ViewGroup.LayoutParams params = (ViewGroup.LayoutParams) chain.getArg(1);
-
-                    Object result = chain.proceed();
-
-                    if (params instanceof WindowManager.LayoutParams) {
-                        WindowManager.LayoutParams wl = (WindowManager.LayoutParams) params;
-                        // Target only sub-windows/panels (types 1000-1999)
-                        // Never target main Activity windows (types 1, 2) to avoid double-remove crashes
-                        boolean isCandidate = (wl.type >= WindowManager.LayoutParams.FIRST_SUB_WINDOW &&
-                                              wl.type <= WindowManager.LayoutParams.LAST_SUB_WINDOW);
-
-                        if (isCandidate) {
-                            view.setAlpha(0f); // Hide until scanned
-                            view.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
-                                @Override
-                                public void onGlobalLayout() {
-                                    // Always remove listener after first run to prevent performance leak
-                                    view.getViewTreeObserver().removeOnGlobalLayoutListener(this);
-
-                                    String match = checkBlock(view, wl, false);
-                                    if (match != null) {
-                                        log(4, TAG, "Blocked View addition in " + pkgName + ". " + match);
-                                        view.post(() -> {
-                                            if (view.isAttachedToWindow()) {
-                                                try {
-                                                    WindowManager wm = (WindowManager) view.getContext().getSystemService(android.content.Context.WINDOW_SERVICE);
-                                                    wm.removeView(view);
-                                                } catch (Exception e) {
-                                                    view.setVisibility(View.GONE);
-                                                }
-                                            } else {
-                                                view.setVisibility(View.GONE);
-                                            }
-                                        });
-                                    } else {
-                                        view.setAlpha(1f);
-                                    }
-                                }
-                            });
-                        }
-                    }
-                    return result;
-                });
-            } catch (NoSuchMethodException | ClassNotFoundException e) {
-                // Ignore
-            }
-
-            // Hook Dialog.show() with lifecycle fix
-            try {
-                Class<?> dialogClass = classLoader.loadClass("android.app.Dialog");
-                Method showDialog = dialogClass.getDeclaredMethod("show");
-                hook(showDialog).intercept(chain -> {
-                    Dialog dialog = (Dialog) chain.getThisObject();
-                    Window window = dialog.getWindow();
-                    if (window != null) {
-                        window.getDecorView().setAlpha(0f);
-                    }
-
-                    Object result = chain.proceed();
-
-                    if (window != null) {
-                        View decor = window.getDecorView();
-                        String match = checkBlock(decor, null, true);
-                        if (match == null && isShizukuAboutDialog(decor)) {
-                            match = "Shizuku About dialog signature";
-                        }
-
-                        if (match != null) {
-                            log(4, TAG, "Blocked Dialog in " + pkgName + ". " + match);
-                            try {
-                                if (dialog.isShowing()) {
-                                    dialog.dismiss();
-                                }
-                            } catch (Exception e) {
-                                // Already dismissed or not attached
-                            }
-                        } else {
-                            window.getDecorView().setAlpha(1f);
-                        }
-                    }
-                    return result;
-                });
-            } catch (NoSuchMethodException | ClassNotFoundException e) {
-                // Ignore
-            }
-
+            hookDialogShow(classLoader, pkgName);
+            hookPopupWindow(classLoader, pkgName);
+            hookRemoveViewSafety(classLoader);
 
         } catch (Exception e) {
             log(4, TAG, "Error in onPackageLoaded: " + e.getMessage());
         }
+    }
+
+    private void hookDialogShow(ClassLoader cl, String pkgName) {
+        try {
+            Class<?> dialogClass = cl.loadClass("android.app.Dialog");
+            Method show = dialogClass.getDeclaredMethod("show");
+            hook(show).intercept(chain -> {
+                Dialog dialog = (Dialog) chain.getThisObject();
+                Window window = dialog.getWindow();
+                if (window != null) window.getDecorView().setAlpha(0f);
+
+                Object result = chain.proceed();
+
+                if (window != null) {
+                    View decor = window.getDecorView();
+                    if (hasEditText(decor)) {
+                        decor.setAlpha(1f);
+                        return result;
+                    }
+
+                    String match = checkBlock(decor, null, true);
+                    if (match == null && isShizukuAboutDialog(decor)) {
+                        match = "Shizuku About dialog signature";
+                    }
+
+                    if (match != null) {
+                        log(4, TAG, "Blocked Dialog in " + pkgName + ". " + match);
+                        try { if (dialog.isShowing()) dialog.dismiss(); }
+                        catch (IllegalArgumentException ignored) {}
+                    } else {
+                        decor.setAlpha(1f);
+                    }
+                }
+                return result;
+            });
+        } catch (Exception e) {
+            log(4, TAG, "hookDialogShow failed: " + e.getMessage());
+        }
+    }
+
+    private void hookPopupWindow(ClassLoader cl, String pkgName) {
+        try {
+            Class<?> pw = cl.loadClass("android.widget.PopupWindow");
+            for (String m : new String[]{"showAsDropDown", "showAtLocation"}) {
+                for (Method method : pw.getDeclaredMethods()) {
+                    if (!method.getName().equals(m)) continue;
+                    hook(method).intercept(chain -> {
+                        PopupWindow popup = (PopupWindow) chain.getThisObject();
+                        View content = popup.getContentView();
+                        if (content != null && !hasEditText(content)) {
+                            String match = checkBlock(content, null, false);
+                            if (match != null) {
+                                log(4, TAG, "Blocked PopupWindow in " + pkgName + ". " + match);
+                                return null;
+                            }
+                        }
+                        return chain.proceed();
+                    });
+                }
+            }
+        } catch (Exception e) {
+            log(4, TAG, "hookPopupWindow failed: " + e.getMessage());
+        }
+    }
+
+    private void hookRemoveViewSafety(ClassLoader cl) {
+        try {
+            Class<?> wmi = cl.loadClass("android.view.WindowManagerImpl");
+            for (String m : new String[]{"removeView", "removeViewImmediate"}) {
+                Method rm = wmi.getDeclaredMethod(m, View.class);
+                hook(rm).intercept(chain -> {
+                    try { return chain.proceed(); }
+                    catch (IllegalArgumentException e) {
+                        if (e.getMessage() != null && e.getMessage().contains("not attached to window manager"))
+                            return null;
+                        throw e;
+                    }
+                });
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private boolean hasEditText(View view) {
+        if (view instanceof android.widget.EditText) return true;
+        if (view instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) view;
+            for (int i = 0; i < g.getChildCount(); i++)
+                if (hasEditText(g.getChildAt(i))) return true;
+        }
+        return false;
     }
 
     private String checkBlock(View view, WindowManager.LayoutParams params, boolean isExplicitDialog) {
