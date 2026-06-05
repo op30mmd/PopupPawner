@@ -1,11 +1,10 @@
 package com.example.popupblocker;
 
-import android.app.Activity;
 import android.app.Dialog;
-import android.content.SharedPreferences;
+import android.net.Uri;
+import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -18,33 +17,16 @@ import io.github.libxposed.api.XposedModuleInterface;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import static com.example.popupblocker.Constants.*;
+
 public class PopupBlockerModule extends XposedModule {
-
-    private static final String TAG = "PopupBlocker";
-    private static final String PREFS_NAME = "popup_blocker_prefs";
-    private static final String KEY_ENABLED = "module_enabled";
-    private static final String KEY_PATTERNS = "blocked_patterns";
-    private static final String KEY_WHITELIST = "whitelist_patterns";
-    private static final String KEY_AGGRESSIVE = "aggressive_mode";
-    private static final String KEY_DIAGNOSTICS = "verbose_diagnostics";
-    private static final String KEY_CONFIG_VERSION = "config_version";
-
-    private static final Set<String> DEFAULT_PATTERNS = new HashSet<>(Arrays.asList(
-            "update", "rating", "survey", "ad", "commercial", "promotion"
-    ));
-    private static final Set<String> DEFAULT_WHITELIST = new HashSet<>(Arrays.asList(
-            "save", "login", "search"
-    ));
 
     /**
      * No-argument constructor required by LibXposed (v101.0.1) for reflective instantiation.
-     * Note: A 2-argument constructor (XposedInterface, ModuleLoadedParam) is not supported
-     * by the superclass in this API version and causes compilation errors.
      */
     public PopupBlockerModule() {
         super();
@@ -64,6 +46,12 @@ public class PopupBlockerModule extends XposedModule {
         if (pkgName.equals("com.example.popupblocker")) {
             return;
         }
+
+        if ("android".equals(pkgName)) {
+            installVisibilityHook(param.getDefaultClassLoader());
+            return;
+        }
+
         log(4, TAG, "Module active in process: " + pkgName);
 
         try {
@@ -169,29 +157,45 @@ public class PopupBlockerModule extends XposedModule {
         return false;
     }
 
+    private volatile Bundle configCache;
+
+    private Bundle getConfig() {
+        try {
+            Class<?> aah = Class.forName("android.app.AndroidAppHelper");
+            android.app.Application app = (android.app.Application) aah.getMethod("currentApplication").invoke(null);
+            if (app != null) {
+                Bundle b = app.getContentResolver().call(
+                        Uri.parse("content://" + AUTHORITY),
+                        "getConfig", null, null);
+                if (b != null) configCache = b;
+            }
+        } catch (Throwable t) {
+            log(4, TAG, "getConfig failed: " + t.getMessage());
+        }
+        return configCache;
+    }
+
     private String checkBlock(View view, WindowManager.LayoutParams params, boolean isExplicitDialog) {
         if (view == null) return null;
-        SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
-        reloadPrefs(prefs);
 
-        // Disk-level diagnostic: Is the file even reachable?
-        java.io.File f = new java.io.File("/data/data/com.example.popupblocker/shared_prefs/" + PREFS_NAME + ".xml");
-        boolean exists = f.exists();
-        boolean canRead = f.canRead();
+        Bundle config = getConfig();
+        if (config == null) return null;
 
-        if (!prefs.getBoolean(KEY_ENABLED, true)) return null;
+        if (!config.getBoolean("enabled", true)) return null;
 
-        boolean aggressive = prefs.getBoolean(KEY_AGGRESSIVE, false);
-        Set<String> patterns = getPatterns(prefs, KEY_PATTERNS, DEFAULT_PATTERNS);
-        Set<String> whitelist = getPatterns(prefs, KEY_WHITELIST, DEFAULT_WHITELIST);
-        long configVersion = prefs.getLong(KEY_CONFIG_VERSION, -1);
+        boolean aggressive = config.getBoolean("aggressive", false);
+        List<String> patterns = config.getStringArrayList("patterns");
+        List<String> whitelist = config.getStringArrayList("whitelist");
+        long configVersion = config.getLong("configVersion", -1);
 
-        log(4, TAG, "Scanning view. Patterns: " + patterns.size() + ", Whitelist: " + whitelist.size()
-                + ", Aggressive: " + aggressive + ", configVersion=" + configVersion
-                + ", fileExists=" + exists + ", fileCanRead=" + canRead);
+        Set<String> patternSet = patterns != null ? new HashSet<>(patterns) : DEFAULT_PATTERNS;
+        Set<String> whitelistSet = whitelist != null ? new HashSet<>(whitelist) : DEFAULT_WHITELIST;
+
+        log(4, TAG, "Scanning view. Patterns: " + patternSet.size() + ", Whitelist: " + whitelistSet.size()
+                + ", Aggressive: " + aggressive + ", configVersion=" + configVersion);
 
         // 1. Whitelist Check (Highest priority)
-        String whiteMatch = findBlockedText(view, whitelist);
+        String whiteMatch = findBlockedText(view, whitelistSet);
         if (whiteMatch != null) {
             log(4, TAG, "Allowing view due to whitelist match: " + whiteMatch);
             return null;
@@ -209,7 +213,7 @@ public class PopupBlockerModule extends XposedModule {
         }
 
         // 3. Pattern Check
-        return findBlockedText(view, patterns);
+        return findBlockedText(view, patternSet);
     }
 
     private boolean isWholeWordMatch(String content, String pattern) {
@@ -303,9 +307,8 @@ public class PopupBlockerModule extends XposedModule {
                 if (!m.getName().equals("addView")) continue;
                 hook(m).intercept(chain -> {
                     try {
-                        SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
-                        reloadPrefs(prefs);
-                        if (!prefs.getBoolean(KEY_DIAGNOSTICS, false)) {
+                        Bundle config = getConfig();
+                        if (config == null || !config.getBoolean("diagnostics", false)) {
                             return chain.proceed();
                         }
 
@@ -319,7 +322,7 @@ public class PopupBlockerModule extends XposedModule {
                         }
                         log(4, TAG, "[WIN] pkg=" + pkg
                                 + " type=" + type
-                                + " configVersion=" + prefs.getLong(KEY_CONFIG_VERSION, -1)
+                                + " configVersion=" + config.getLong("configVersion", -1)
                                 + " view=" + (v == null ? "null" : v.getClass().getName())
                                 + " text=" + dumpText(v, new StringBuilder(), 0));
                         // The caller chain is the answer: Dialog.show? PopupWindow? DialogFragment? custom?
@@ -351,23 +354,28 @@ public class PopupBlockerModule extends XposedModule {
         return sb.toString();
     }
 
-    private void reloadPrefs(SharedPreferences prefs) {
+    private void installVisibilityHook(ClassLoader cl) {
         try {
-            // Reflective check for XSharedPreferences to pick up on-disk changes
-            Method reload = prefs.getClass().getMethod("reload");
-            reload.invoke(prefs);
-        } catch (Exception ignored) {}
-    }
-
-    private Set<String> getPatterns(SharedPreferences prefs, String key, Set<String> defaults) {
-        try {
-            if (prefs != null && prefs.contains(key)) {
-                Set<String> p = prefs.getStringSet(key, null);
-                return (p != null) ? new HashSet<>(p) : new HashSet<>();
+            Class<?> appsFilter = cl.loadClass("com.android.server.pm.AppsFilterBase");
+            for (Method m : appsFilter.getDeclaredMethods()) {
+                if (!m.getName().equals("shouldFilterApplication")) continue;
+                if (m.getParameterCount() != 5) continue;
+                hook(m).intercept(chain -> {
+                    try {
+                        Object target = chain.getArgs().get(3); // PackageStateInternal
+                        if (target != null) {
+                            String pkg = (String) target.getClass().getMethod("getPackageName").invoke(target);
+                            if ("com.example.popupblocker".equals(pkg)) {
+                                return false; // Do not filter -> module visible
+                            }
+                        }
+                    } catch (Throwable ignored) {}
+                    return chain.proceed();
+                });
+                log(4, TAG, "Hooked AppsFilterBase.shouldFilterApplication");
             }
-        } catch (Exception e) {
-            log(4, TAG, "Failed to read patterns for " + key + ": " + e.getMessage());
+        } catch (Throwable t) {
+            log(4, TAG, "Visibility hook failed: " + t);
         }
-        return defaults;
     }
 }
