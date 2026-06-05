@@ -1,6 +1,7 @@
 package com.example.popupblocker;
 
 import android.app.Dialog;
+import android.content.Context;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.View;
@@ -158,19 +159,30 @@ public class PopupBlockerModule extends XposedModule {
     }
 
     private volatile Bundle configCache;
+    private volatile Context appContext;
+
+    private Context getAppContext() {
+        if (appContext != null) return appContext;
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object app = at.getMethod("currentApplication").invoke(null);
+            if (app != null) appContext = (Context) app;
+        } catch (Throwable t) {
+            log(4, TAG, "getAppContext failed: " + t);
+        }
+        return appContext;
+    }
 
     private Bundle getConfig() {
+        Context ctx = getAppContext();
+        if (ctx == null) return configCache;
         try {
-            Class<?> aah = Class.forName("android.app.AndroidAppHelper");
-            android.app.Application app = (android.app.Application) aah.getMethod("currentApplication").invoke(null);
-            if (app != null) {
-                Bundle b = app.getContentResolver().call(
-                        Uri.parse("content://" + AUTHORITY),
-                        "getConfig", null, null);
-                if (b != null) configCache = b;
-            }
+            Bundle b = ctx.getContentResolver().call(
+                    Uri.parse("content://" + AUTHORITY),
+                    "getConfig", null, null);
+            if (b != null) configCache = b;
         } catch (Throwable t) {
-            log(4, TAG, "getConfig failed: " + t.getMessage());
+            log(4, TAG, "getConfig failed: " + t);
         }
         return configCache;
     }
