@@ -46,9 +46,11 @@ public class PopupBlockerModule extends XposedModule {
         if (pkgName.equals("com.example.popupblocker")) {
             return;
         }
+        log(4, TAG, "Module active in process: " + pkgName);
 
         try {
             ClassLoader classLoader = param.getDefaultClassLoader();
+            installWindowDiagnostics(classLoader, pkgName);
 
             // Hook WindowManagerImpl.addView - catch all window types (Compose, Popups, etc)
             try {
@@ -226,6 +228,54 @@ public class PopupBlockerModule extends XposedModule {
             }
         }
         return null;
+    }
+
+    private void installWindowDiagnostics(ClassLoader cl, String pkg) {
+        try {
+            Class<?> wmg = cl.loadClass("android.view.WindowManagerGlobal");
+            for (Method m : wmg.getDeclaredMethods()) {
+                if (!m.getName().equals("addView")) continue;
+                hook(m).intercept(chain -> {
+                    try {
+                        View v = null;
+                        int type = -1;
+                        for (int i = 0; i < chain.getArgs().size(); i++) {
+                            Object a = chain.getArg(i);
+                            if (a instanceof View) v = (View) a;
+                            if (a instanceof WindowManager.LayoutParams)
+                                type = ((WindowManager.LayoutParams) a).type;
+                        }
+                        log(4, TAG, "[WIN] pkg=" + pkg
+                                + " type=" + type
+                                + " view=" + (v == null ? "null" : v.getClass().getName())
+                                + " text=" + dumpText(v, new StringBuilder(), 0));
+                        // The caller chain is the answer: Dialog.show? PopupWindow? DialogFragment? custom?
+                        StackTraceElement[] st = new Throwable().getStackTrace();
+                        for (int i = 0; i < Math.min(st.length, 25); i++) {
+                            log(4, TAG, "    at " + st[i]);
+                        }
+                    } catch (Throwable t) {
+                        log(4, TAG, "diag err: " + t);
+                    }
+                    return chain.proceed();
+                });
+            }
+        } catch (Throwable t) {
+            log(4, TAG, "diag install failed: " + t);
+        }
+    }
+
+    private String dumpText(View v, StringBuilder sb, int depth) {
+        if (v == null || depth > 12 || sb.length() > 300) return sb.toString();
+        if (v instanceof TextView) {
+            CharSequence t = ((TextView) v).getText();
+            if (t != null && t.length() > 0) sb.append('|').append(t);
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) dumpText(g.getChildAt(i), sb, depth + 1);
+        }
+        return sb.toString();
     }
 
     private Set<String> getPatterns() {
