@@ -15,6 +15,9 @@
         <meta-data
             android:name="xposedminversion"
             android:value="101" />
+        <meta-data
+            android:name="libxposed:module"
+            android:value="com.example.popupblocker.PopupBlockerModule" />
 
         <activity android:name=".SettingsActivity"
             android:exported="true">

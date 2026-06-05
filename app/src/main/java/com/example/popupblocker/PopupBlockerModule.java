@@ -71,10 +71,8 @@ public class PopupBlockerModule extends XposedModule {
                             view.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
                                 @Override
                                 public void onGlobalLayout() {
-                                    // Always remove listener after first run to prevent performance leak
                                     view.getViewTreeObserver().removeOnGlobalLayoutListener(this);
-
-                                    String match = checkBlock(view, wl, false);
+                                    String match = checkBlock(view, wl);
                                     if (match != null) {
                                         log(4, TAG, "Blocked View addition in " + pkgName + ". " + match);
                                         view.setVisibility(View.GONE);
@@ -91,7 +89,7 @@ public class PopupBlockerModule extends XposedModule {
                 // Ignore
             }
 
-            // Hook Dialog.show() - traditional Dialog fix
+            // Hook Dialog.show() with lifecycle fix
             try {
                 Class<?> dialogClass = classLoader.loadClass("android.app.Dialog");
                 Method showDialog = dialogClass.getDeclaredMethod("show");
@@ -105,7 +103,7 @@ public class PopupBlockerModule extends XposedModule {
                     Object result = chain.proceed();
 
                     if (window != null) {
-                        String match = checkBlock(window.getDecorView(), null, true);
+                        String match = checkBlock(window.getDecorView(), null);
                         if (match != null) {
                             log(4, TAG, "Blocked Dialog in " + pkgName + ". " + match);
                             dialog.dismiss();
@@ -127,7 +125,7 @@ public class PopupBlockerModule extends XposedModule {
                     Activity activity = (Activity) chain.getThisObject();
                     Object result = chain.proceed();
 
-                    String match = checkBlock(activity.getWindow().getDecorView(), null, false);
+                    String match = findBlockedText(activity.getWindow().getDecorView(), getPatterns());
                     if (match != null) {
                         log(4, TAG, "Blocked Activity popup in " + pkgName + ". " + match);
                         activity.finish();
@@ -143,37 +141,35 @@ public class PopupBlockerModule extends XposedModule {
         }
     }
 
-    private String checkBlock(View view, WindowManager.LayoutParams params, boolean isExplicitDialog) {
+    private String checkBlock(View view, WindowManager.LayoutParams params) {
         if (view == null) return null;
         SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
 
         if (prefs.getBoolean(KEY_AGGRESSIVE, false)) {
-            if (isExplicitDialog) {
-                return "Aggressive mode (Dialog)";
-            }
-            if (params != null && params.type >= 1000 && params.type <= 2999) {
-                return "Aggressive mode (Window Type " + params.type + ")";
+            if (params != null && params.type >= 1000) {
+                return "Aggressive mode (Type " + params.type + ")";
+            } else if (params == null) {
+                return "Aggressive mode";
             }
         }
 
-        Set<String> patterns = prefs.getStringSet(KEY_PATTERNS, DEFAULT_PATTERNS);
-        return findBlockedText(view, patterns);
+        return findBlockedText(view, getPatterns());
     }
 
     private String findBlockedText(View view, Set<String> patterns) {
         if (view == null) return null;
 
-        // 1. STANDARD ANDROID SEARCH
+        // 1. Native search
         ArrayList<View> outViews = new ArrayList<>();
         for (String pattern : patterns) {
             view.findViewsWithText(outViews, pattern, 1); // FIND_VIEWS_WITH_TEXT
-            if (!outViews.isEmpty()) return "Text match: " + pattern;
+            if (!outViews.isEmpty()) return "Native text match: " + pattern;
 
             view.findViewsWithText(outViews, pattern, 2); // FIND_VIEWS_WITH_CONTENT_DESCRIPTION
-            if (!outViews.isEmpty()) return "Description match: " + pattern;
+            if (!outViews.isEmpty()) return "Native description match: " + pattern;
         }
 
-        // 2. VIRTUAL TREE SEARCH (Compose, Flutter)
+        // 2. Virtual tree search (Compose, Flutter)
         AccessibilityNodeProvider provider = view.getAccessibilityNodeProvider();
         if (provider != null) {
             for (String pattern : patterns) {
@@ -186,7 +182,7 @@ public class PopupBlockerModule extends XposedModule {
             }
         }
 
-        // 3. FALLBACK
+        // 3. Fallback
         return findBlockedTextRecursive(view, patterns);
     }
 
@@ -208,5 +204,14 @@ public class PopupBlockerModule extends XposedModule {
             }
         }
         return null;
+    }
+
+    private Set<String> getPatterns() {
+        try {
+            SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
+            return prefs.getStringSet(KEY_PATTERNS, DEFAULT_PATTERNS);
+        } catch (Exception e) {
+            return DEFAULT_PATTERNS;
+        }
     }
 }
