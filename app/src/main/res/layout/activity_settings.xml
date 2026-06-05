@@ -5,9 +5,18 @@
     android:orientation="vertical"
     android:padding="16dp">
 
+    <CheckBox
+        android:id="@+id/enabled_checkbox"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Enable Popup Blocker"
+        android:checked="true"
+        android:textStyle="bold" />
+
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
         android:text="Blocked Text Patterns (comma separated):"
         android:textStyle="bold" />
 
@@ -17,14 +26,35 @@
         android:layout_height="wrap_content"
         android:hint="e.g. update,rating,survey"
         android:inputType="textMultiLine"
-        android:minLines="3" />
+        android:minLines="2" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Whitelist Patterns (Don't block if matched):"
+        android:textStyle="bold" />
+
+    <EditText
+        android:id="@+id/whitelist_edit"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="e.g. save,login,search"
+        android:inputType="textMultiLine"
+        android:minLines="2" />
 
     <CheckBox
         android:id="@+id/aggressive_checkbox"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:text="Aggressive Mode (Block all popups)" />
+        android:layout_marginTop="8dp"
+        android:text="Aggressive Mode (Block all sub-windows)" />
+
+    <CheckBox
+        android:id="@+id/diagnostics_checkbox"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Verbose Diagnostics Logging" />
 
     <Button
         android:id="@+id/save_button"

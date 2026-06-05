@@ -27,15 +27,18 @@ public class PopupBlockerModule extends XposedModule {
 
     private static final String TAG = "PopupBlocker";
     private static final String PREFS_NAME = "popup_blocker_prefs";
+    private static final String KEY_ENABLED = "module_enabled";
     private static final String KEY_PATTERNS = "blocked_patterns";
+    private static final String KEY_WHITELIST = "whitelist_patterns";
     private static final String KEY_AGGRESSIVE = "aggressive_mode";
+    private static final String KEY_DIAGNOSTICS = "verbose_diagnostics";
+
     private static final Set<String> DEFAULT_PATTERNS = new HashSet<>(Arrays.asList(
             "update", "rating", "survey", "ad", "commercial", "promotion"
     ));
-
-    public PopupBlockerModule() {
-        super();
-    }
+    private static final Set<String> DEFAULT_WHITELIST = new HashSet<>(Arrays.asList(
+            "save", "login", "search"
+    ));
 
     public PopupBlockerModule(XposedInterface base, XposedModuleInterface.ModuleLoadedParam param) {
         super();
@@ -165,19 +168,36 @@ public class PopupBlockerModule extends XposedModule {
     private String checkBlock(View view, WindowManager.LayoutParams params, boolean isExplicitDialog) {
         if (view == null) return null;
         SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
+        reloadPrefs(prefs);
 
-        if (prefs.getBoolean(KEY_AGGRESSIVE, false)) {
+        if (!prefs.getBoolean(KEY_ENABLED, true)) return null;
+
+        boolean aggressive = prefs.getBoolean(KEY_AGGRESSIVE, false);
+        Set<String> patterns = getPatterns(prefs, KEY_PATTERNS, DEFAULT_PATTERNS);
+        Set<String> whitelist = getPatterns(prefs, KEY_WHITELIST, DEFAULT_WHITELIST);
+
+        log(4, TAG, "Scanning view. Patterns: " + patterns.size() + ", Whitelist: " + whitelist.size() + ", Aggressive: " + aggressive);
+
+        // 1. Whitelist Check (Highest priority)
+        String whiteMatch = findBlockedText(view, whitelist);
+        if (whiteMatch != null) {
+            log(4, TAG, "Allowing view due to whitelist match: " + whiteMatch);
+            return null;
+        }
+
+        // 2. Aggressive Check
+        if (aggressive) {
             if (isExplicitDialog) {
                 return "Aggressive mode (Dialog)";
             }
-            // In aggressive mode, block all sub-windows but still exclude main Activities
             if (params != null && params.type >= WindowManager.LayoutParams.FIRST_SUB_WINDOW
                     && params.type <= WindowManager.LayoutParams.LAST_SUB_WINDOW) {
                 return "Aggressive mode (Window Type " + params.type + ")";
             }
         }
 
-        return findBlockedText(view, getPatterns());
+        // 3. Pattern Check
+        return findBlockedText(view, patterns);
     }
 
     private boolean isWholeWordMatch(String content, String pattern) {
@@ -271,6 +291,11 @@ public class PopupBlockerModule extends XposedModule {
                 if (!m.getName().equals("addView")) continue;
                 hook(m).intercept(chain -> {
                     try {
+                        SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
+                        if (!prefs.getBoolean(KEY_DIAGNOSTICS, false)) {
+                            return chain.proceed();
+                        }
+
                         View v = null;
                         int type = -1;
                         for (int i = 0; i < chain.getArgs().size(); i++) {
@@ -312,16 +337,23 @@ public class PopupBlockerModule extends XposedModule {
         return sb.toString();
     }
 
-    private Set<String> getPatterns() {
+    private void reloadPrefs(SharedPreferences prefs) {
         try {
-            SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
+            // Reflective check for XSharedPreferences to pick up on-disk changes
+            Method reload = prefs.getClass().getMethod("reload");
+            reload.invoke(prefs);
+        } catch (Exception ignored) {}
+    }
+
+    private Set<String> getPatterns(SharedPreferences prefs, String key, Set<String> defaults) {
+        try {
             if (prefs != null) {
-                Set<String> customPatterns = prefs.getStringSet(KEY_PATTERNS, DEFAULT_PATTERNS);
-                return customPatterns;
+                Set<String> p = prefs.getStringSet(key, defaults);
+                return (p != null) ? p : defaults;
             }
         } catch (Exception e) {
-            log(4, TAG, "Failed to read prefs: " + e.getMessage());
+            log(4, TAG, "Failed to read patterns for " + key + ": " + e.getMessage());
         }
-        return DEFAULT_PATTERNS;
+        return defaults;
     }
 }
