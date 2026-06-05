@@ -129,7 +129,12 @@ public class PopupBlockerModule extends XposedModule {
                     Object result = chain.proceed();
 
                     if (window != null) {
-                        String match = checkBlock(window.getDecorView(), null, true);
+                        View decor = window.getDecorView();
+                        String match = checkBlock(decor, null, true);
+                        if (match == null && isShizukuAboutDialog(decor)) {
+                            match = "Shizuku About dialog signature";
+                        }
+
                         if (match != null) {
                             log(4, TAG, "Blocked Dialog in " + pkgName + ". " + match);
                             try {
@@ -163,7 +168,9 @@ public class PopupBlockerModule extends XposedModule {
             if (isExplicitDialog) {
                 return "Aggressive mode (Dialog)";
             }
-            if (params != null && params.type >= 1000 && params.type <= 2999) {
+            // In aggressive mode, block all sub-windows but still exclude main Activities
+            if (params != null && params.type >= WindowManager.LayoutParams.FIRST_SUB_WINDOW
+                    && params.type <= WindowManager.LayoutParams.LAST_SUB_WINDOW) {
                 return "Aggressive mode (Window Type " + params.type + ")";
             }
         }
@@ -211,6 +218,21 @@ public class PopupBlockerModule extends XposedModule {
 
         // 2. Fallback to recursive scan (covers TextViews, Buttons, etc. with whole-word matching)
         return findBlockedTextRecursive(view, patterns);
+    }
+
+    private boolean isShizukuAboutDialog(View decor) {
+        String text = dumpText(decor, new StringBuilder(), 0).toLowerCase();
+        if (text.isEmpty()) return false;
+
+        boolean hasGithub  = text.contains("github");
+        boolean hasVersion = java.util.regex.Pattern
+                .compile("\\d+\\.\\d+\\.\\d+\\.r\\d+")   // e.g. 13.5.4.r1049
+                .matcher(text).find();
+        boolean hasSource  = text.contains("source code");
+
+        // require >=2 independent signals so a normal dialog can't trip it
+        int signals = (hasGithub ? 1 : 0) + (hasVersion ? 1 : 0) + (hasSource ? 1 : 0);
+        return signals >= 2;
     }
 
     private String findBlockedTextRecursive(View view, Set<String> patterns) {
