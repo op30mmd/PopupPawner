@@ -174,6 +174,11 @@ public class PopupBlockerModule extends XposedModule {
         SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
         reloadPrefs(prefs);
 
+        // Disk-level diagnostic: Is the file even reachable?
+        java.io.File f = new java.io.File("/data/data/com.example.popupblocker/shared_prefs/" + PREFS_NAME + ".xml");
+        boolean exists = f.exists();
+        boolean canRead = f.canRead();
+
         if (!prefs.getBoolean(KEY_ENABLED, true)) return null;
 
         boolean aggressive = prefs.getBoolean(KEY_AGGRESSIVE, false);
@@ -181,7 +186,9 @@ public class PopupBlockerModule extends XposedModule {
         Set<String> whitelist = getPatterns(prefs, KEY_WHITELIST, DEFAULT_WHITELIST);
         long configVersion = prefs.getLong(KEY_CONFIG_VERSION, -1);
 
-        log(4, TAG, "Scanning view. Patterns: " + patterns.size() + ", Whitelist: " + whitelist.size() + ", Aggressive: " + aggressive + ", configVersion=" + configVersion);
+        log(4, TAG, "Scanning view. Patterns: " + patterns.size() + ", Whitelist: " + whitelist.size()
+                + ", Aggressive: " + aggressive + ", configVersion=" + configVersion
+                + ", fileExists=" + exists + ", fileCanRead=" + canRead);
 
         // 1. Whitelist Check (Highest priority)
         String whiteMatch = findBlockedText(view, whitelist);

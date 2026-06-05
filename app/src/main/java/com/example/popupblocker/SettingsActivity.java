@@ -30,11 +30,14 @@ public class SettingsActivity extends Activity {
     private CheckBox aggressiveCheckbox;
     private CheckBox diagnosticsCheckbox;
 
-    private SharedPreferences openPrefs() {
+    private SharedPreferences openPrefs(boolean[] worldReadable) {
         try {
             // LSPosed bridges MODE_WORLD_READABLE to hooked processes
-            return getSharedPreferences(PREFS_NAME, Context.MODE_WORLD_READABLE);
+            SharedPreferences sp = getSharedPreferences(PREFS_NAME, Context.MODE_WORLD_READABLE);
+            if (worldReadable != null && worldReadable.length > 0) worldReadable[0] = true;
+            return sp;
         } catch (SecurityException e) {
+            if (worldReadable != null && worldReadable.length > 0) worldReadable[0] = false;
             return getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         }
     }
@@ -51,7 +54,7 @@ public class SettingsActivity extends Activity {
         diagnosticsCheckbox = findViewById(R.id.diagnostics_checkbox);
         Button saveButton = findViewById(R.id.save_button);
 
-        SharedPreferences prefs = openPrefs();
+        SharedPreferences prefs = openPrefs(null);
         enabledCheckbox.setChecked(prefs.getBoolean(KEY_ENABLED, true));
         aggressiveCheckbox.setChecked(prefs.getBoolean(KEY_AGGRESSIVE, false));
         diagnosticsCheckbox.setChecked(prefs.getBoolean(KEY_DIAGNOSTICS, false));
@@ -62,7 +65,8 @@ public class SettingsActivity extends Activity {
                 new HashSet<>(Arrays.asList("save", "login", "search")))));
 
         saveButton.setOnClickListener(v -> {
-            openPrefs().edit()
+            boolean[] wr = new boolean[1];
+            openPrefs(wr).edit()
                     .putBoolean(KEY_ENABLED, enabledCheckbox.isChecked())
                     .putStringSet(KEY_PATTERNS, new HashSet<>(splitString(patternsEdit.getText().toString())))
                     .putStringSet(KEY_WHITELIST, new HashSet<>(splitString(whitelistEdit.getText().toString())))
@@ -71,15 +75,17 @@ public class SettingsActivity extends Activity {
                     .putLong(KEY_CONFIG_VERSION, System.currentTimeMillis())
                     .apply();
 
+            boolean setReadableSuccess = false;
             // Explicitly set world-readable for the prefs file, required on many ROMs
             try {
                 File prefsFile = new File(getApplicationInfo().dataDir, "shared_prefs/" + PREFS_NAME + ".xml");
                 if (prefsFile.exists()) {
-                    prefsFile.setReadable(true, false);
+                    setReadableSuccess = prefsFile.setReadable(true, false);
                 }
             } catch (Exception ignored) {}
 
-            Toast.makeText(this, "Settings saved", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Saved. WR=" + wr[0] + ", SR=" + setReadableSuccess, Toast.LENGTH_LONG).show();
+            android.util.Log.i("PopupBlocker", "Settings saved. worldReadable=" + wr[0] + ", setReadableSuccess=" + setReadableSuccess);
         });
     }
 
