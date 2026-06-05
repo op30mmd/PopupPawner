@@ -32,10 +32,20 @@ public class PopupBlockerModule extends XposedModule {
             "update", "rating", "survey", "ad", "commercial", "promotion"
     ));
 
+    public PopupBlockerModule() {
+        super();
+    }
+
     public PopupBlockerModule(XposedInterface base, XposedModuleInterface.ModuleLoadedParam param) {
         super();
         attachFramework(base);
-        log(4, TAG, "Module instantiated");
+        log(4, TAG, "Module instantiated in " + param.getProcessName());
+    }
+
+    @Override
+    public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
+        super.onModuleLoaded(param);
+        log(4, TAG, "onModuleLoaded in " + param.getProcessName());
     }
 
     @Override
