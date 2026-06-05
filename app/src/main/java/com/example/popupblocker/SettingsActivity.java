@@ -22,6 +22,7 @@ public class SettingsActivity extends Activity {
     private static final String KEY_WHITELIST = "whitelist_patterns";
     private static final String KEY_AGGRESSIVE = "aggressive_mode";
     private static final String KEY_DIAGNOSTICS = "verbose_diagnostics";
+    private static final String KEY_CONFIG_VERSION = "config_version";
 
     private CheckBox enabledCheckbox;
     private EditText patternsEdit;
@@ -63,11 +64,20 @@ public class SettingsActivity extends Activity {
         saveButton.setOnClickListener(v -> {
             openPrefs().edit()
                     .putBoolean(KEY_ENABLED, enabledCheckbox.isChecked())
-                    .putStringSet(KEY_PATTERNS, splitString(patternsEdit.getText().toString()))
-                    .putStringSet(KEY_WHITELIST, splitString(whitelistEdit.getText().toString()))
+                    .putStringSet(KEY_PATTERNS, new HashSet<>(splitString(patternsEdit.getText().toString())))
+                    .putStringSet(KEY_WHITELIST, new HashSet<>(splitString(whitelistEdit.getText().toString())))
                     .putBoolean(KEY_AGGRESSIVE, aggressiveCheckbox.isChecked())
                     .putBoolean(KEY_DIAGNOSTICS, diagnosticsCheckbox.isChecked())
+                    .putLong(KEY_CONFIG_VERSION, System.currentTimeMillis())
                     .apply();
+
+            // Explicitly set world-readable for the prefs file, required on many ROMs
+            try {
+                File prefsFile = new File(getApplicationInfo().dataDir, "shared_prefs/" + PREFS_NAME + ".xml");
+                if (prefsFile.exists()) {
+                    prefsFile.setReadable(true, false);
+                }
+            } catch (Exception ignored) {}
 
             Toast.makeText(this, "Settings saved", Toast.LENGTH_SHORT).show();
         });

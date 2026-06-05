@@ -32,6 +32,7 @@ public class PopupBlockerModule extends XposedModule {
     private static final String KEY_WHITELIST = "whitelist_patterns";
     private static final String KEY_AGGRESSIVE = "aggressive_mode";
     private static final String KEY_DIAGNOSTICS = "verbose_diagnostics";
+    private static final String KEY_CONFIG_VERSION = "config_version";
 
     private static final Set<String> DEFAULT_PATTERNS = new HashSet<>(Arrays.asList(
             "update", "rating", "survey", "ad", "commercial", "promotion"
@@ -178,8 +179,9 @@ public class PopupBlockerModule extends XposedModule {
         boolean aggressive = prefs.getBoolean(KEY_AGGRESSIVE, false);
         Set<String> patterns = getPatterns(prefs, KEY_PATTERNS, DEFAULT_PATTERNS);
         Set<String> whitelist = getPatterns(prefs, KEY_WHITELIST, DEFAULT_WHITELIST);
+        long configVersion = prefs.getLong(KEY_CONFIG_VERSION, -1);
 
-        log(4, TAG, "Scanning view. Patterns: " + patterns.size() + ", Whitelist: " + whitelist.size() + ", Aggressive: " + aggressive);
+        log(4, TAG, "Scanning view. Patterns: " + patterns.size() + ", Whitelist: " + whitelist.size() + ", Aggressive: " + aggressive + ", configVersion=" + configVersion);
 
         // 1. Whitelist Check (Highest priority)
         String whiteMatch = findBlockedText(view, whitelist);
@@ -295,6 +297,7 @@ public class PopupBlockerModule extends XposedModule {
                 hook(m).intercept(chain -> {
                     try {
                         SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
+                        reloadPrefs(prefs);
                         if (!prefs.getBoolean(KEY_DIAGNOSTICS, false)) {
                             return chain.proceed();
                         }
@@ -309,6 +312,7 @@ public class PopupBlockerModule extends XposedModule {
                         }
                         log(4, TAG, "[WIN] pkg=" + pkg
                                 + " type=" + type
+                                + " configVersion=" + prefs.getLong(KEY_CONFIG_VERSION, -1)
                                 + " view=" + (v == null ? "null" : v.getClass().getName())
                                 + " text=" + dumpText(v, new StringBuilder(), 0));
                         // The caller chain is the answer: Dialog.show? PopupWindow? DialogFragment? custom?
@@ -350,9 +354,9 @@ public class PopupBlockerModule extends XposedModule {
 
     private Set<String> getPatterns(SharedPreferences prefs, String key, Set<String> defaults) {
         try {
-            if (prefs != null) {
-                Set<String> p = prefs.getStringSet(key, defaults);
-                return (p != null) ? p : defaults;
+            if (prefs != null && prefs.contains(key)) {
+                Set<String> p = prefs.getStringSet(key, null);
+                return (p != null) ? new HashSet<>(p) : new HashSet<>();
             }
         } catch (Exception e) {
             log(4, TAG, "Failed to read patterns for " + key + ": " + e.getMessage());
