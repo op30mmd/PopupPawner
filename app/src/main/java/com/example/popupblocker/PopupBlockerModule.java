@@ -32,10 +32,6 @@ public class PopupBlockerModule extends XposedModule {
             "update", "rating", "survey", "ad", "commercial", "promotion"
     ));
 
-    public PopupBlockerModule() {
-        super();
-    }
-
     public PopupBlockerModule(XposedInterface base, XposedModuleInterface.ModuleLoadedParam param) {
         super();
         attachFramework(base);
@@ -59,17 +55,17 @@ public class PopupBlockerModule extends XposedModule {
                 Class<?> wmClass = classLoader.loadClass("android.view.WindowManagerImpl");
                 Method addView = wmClass.getDeclaredMethod("addView", View.class, ViewGroup.LayoutParams.class);
                 hook(addView).intercept(chain -> {
-                    View view = (View) chain.getArgs().get(0);
-                    ViewGroup.LayoutParams params = (ViewGroup.LayoutParams) chain.getArgs().get(1);
+                    View view = (View) chain.getArg(0);
+                    ViewGroup.LayoutParams params = (ViewGroup.LayoutParams) chain.getArg(1);
 
                     Object result = chain.proceed();
 
                     if (params instanceof WindowManager.LayoutParams) {
                         WindowManager.LayoutParams wl = (WindowManager.LayoutParams) params;
-                        // Target application windows (types 1, 2) and sub-windows/panels (types 1000-2999)
-                        boolean isCandidate = wl.type == WindowManager.LayoutParams.TYPE_APPLICATION
-                                || wl.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION
-                                || (wl.type >= 1000 && wl.type <= 2999);
+                        // Target only sub-windows/panels (types 1000-1999)
+                        // Never target main Activity windows (types 1, 2) to avoid double-remove crashes
+                        boolean isCandidate = (wl.type >= WindowManager.LayoutParams.FIRST_SUB_WINDOW &&
+                                              wl.type <= WindowManager.LayoutParams.LAST_SUB_WINDOW);
 
                         if (isCandidate) {
                             view.setAlpha(0f); // Hide until scanned
@@ -82,12 +78,18 @@ public class PopupBlockerModule extends XposedModule {
                                     String match = checkBlock(view, wl, false);
                                     if (match != null) {
                                         log(4, TAG, "Blocked View addition in " + pkgName + ". " + match);
-                                        try {
-                                            WindowManager wm = (WindowManager) view.getContext().getSystemService(android.content.Context.WINDOW_SERVICE);
-                                            wm.removeViewImmediate(view);
-                                        } catch (Exception e) {
-                                            view.setVisibility(View.GONE);
-                                        }
+                                        view.post(() -> {
+                                            if (view.isAttachedToWindow()) {
+                                                try {
+                                                    WindowManager wm = (WindowManager) view.getContext().getSystemService(android.content.Context.WINDOW_SERVICE);
+                                                    wm.removeView(view);
+                                                } catch (Exception e) {
+                                                    view.setVisibility(View.GONE);
+                                                }
+                                            } else {
+                                                view.setVisibility(View.GONE);
+                                            }
+                                        });
                                     } else {
                                         view.setAlpha(1f);
                                     }
@@ -118,7 +120,13 @@ public class PopupBlockerModule extends XposedModule {
                         String match = checkBlock(window.getDecorView(), null, true);
                         if (match != null) {
                             log(4, TAG, "Blocked Dialog in " + pkgName + ". " + match);
-                            dialog.dismiss();
+                            try {
+                                if (dialog.isShowing()) {
+                                    dialog.dismiss();
+                                }
+                            } catch (Exception e) {
+                                // Already dismissed or not attached
+                            }
                         } else {
                             window.getDecorView().setAlpha(1f);
                         }
@@ -151,33 +159,45 @@ public class PopupBlockerModule extends XposedModule {
         return findBlockedText(view, getPatterns());
     }
 
+    private boolean isWholeWordMatch(String content, String pattern) {
+        if (content == null || pattern == null) return false;
+        try {
+            return java.util.regex.Pattern.compile("\\b" + java.util.regex.Pattern.quote(pattern) + "\\b",
+                    java.util.regex.Pattern.CASE_INSENSITIVE).matcher(content).find();
+        } catch (Exception e) {
+            return content.toLowerCase().contains(pattern.toLowerCase());
+        }
+    }
+
     private String findBlockedText(View view, Set<String> patterns) {
         if (view == null) return null;
 
-        // 1. Native search
-        ArrayList<View> outViews = new ArrayList<>();
-        for (String pattern : patterns) {
-            view.findViewsWithText(outViews, pattern, 1); // FIND_VIEWS_WITH_TEXT
-            if (!outViews.isEmpty()) return "Native text match: " + pattern;
-
-            view.findViewsWithText(outViews, pattern, 2); // FIND_VIEWS_WITH_CONTENT_DESCRIPTION
-            if (!outViews.isEmpty()) return "Native description match: " + pattern;
-        }
-
-        // 2. Virtual tree search (Compose, Flutter)
+        // 1. Virtual tree search (Compose, Flutter)
         AccessibilityNodeProvider provider = view.getAccessibilityNodeProvider();
         if (provider != null) {
             for (String pattern : patterns) {
                 try {
+                    // findAccessibilityNodeInfosByText is often substring-based, so we filter results
                     List<AccessibilityNodeInfo> nodes = provider.findAccessibilityNodeInfosByText(pattern, -1);
-                    if (nodes != null && !nodes.isEmpty()) {
-                        return "Virtual tree match: " + pattern;
+                    if (nodes != null) {
+                        String matchFound = null;
+                        for (AccessibilityNodeInfo node : nodes) {
+                            if (matchFound == null) {
+                                if (node.getText() != null && isWholeWordMatch(node.getText().toString(), pattern)) {
+                                    matchFound = "Virtual tree match: " + pattern;
+                                } else if (node.getContentDescription() != null && isWholeWordMatch(node.getContentDescription().toString(), pattern)) {
+                                    matchFound = "Virtual tree match (desc): " + pattern;
+                                }
+                            }
+                            node.recycle();
+                        }
+                        if (matchFound != null) return matchFound;
                     }
                 } catch (Throwable ignored) {}
             }
         }
 
-        // 3. Fallback
+        // 2. Fallback to recursive scan (covers TextViews, Buttons, etc. with whole-word matching)
         return findBlockedTextRecursive(view, patterns);
     }
 
@@ -185,17 +205,16 @@ public class PopupBlockerModule extends XposedModule {
         if (view instanceof TextView) {
             CharSequence text = ((TextView) view).getText();
             if (text != null) {
-                String content = text.toString();
                 for (String p : patterns) {
-                    try {
-                        if (java.util.regex.Pattern.compile("\\b" + java.util.regex.Pattern.quote(p) + "\\b",
-                                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(content).find()) {
-                            return "Recursive text match: " + p;
-                        }
-                    } catch (Exception e) {
-                        if (content.toLowerCase().contains(p.toLowerCase())) return "Fallback text match: " + p;
-                    }
+                    if (isWholeWordMatch(text.toString(), p)) return "Recursive text match: " + p;
                 }
+            }
+        }
+
+        CharSequence desc = view.getContentDescription();
+        if (desc != null) {
+            for (String p : patterns) {
+                if (isWholeWordMatch(desc.toString(), p)) return "Recursive description match: " + p;
             }
         }
 

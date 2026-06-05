@@ -65,7 +65,6 @@ public class SettingsActivity extends Activity {
                 File prefsFile = new File(getApplicationInfo().dataDir, "shared_prefs/" + PREFS_NAME + ".xml");
                 if (prefsFile.exists()) {
                     prefsFile.setReadable(true, false);
-                    prefsFile.setExecutable(true, false);
                 }
             } catch (Exception e) {
                 e.printStackTrace();
