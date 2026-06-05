@@ -39,6 +39,7 @@ public class PopupBlockerModule extends XposedModule {
     public PopupBlockerModule(XposedInterface base, XposedModuleInterface.ModuleLoadedParam param) {
         super();
         attachFramework(base);
+        log(4, TAG, "Module instantiated");
     }
 
     @Override
@@ -71,8 +72,10 @@ public class PopupBlockerModule extends XposedModule {
                             view.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
                                 @Override
                                 public void onGlobalLayout() {
+                                    // Always remove listener after first run to prevent performance leak
                                     view.getViewTreeObserver().removeOnGlobalLayoutListener(this);
-                                    String match = checkBlock(view, wl);
+
+                                    String match = checkBlock(view, wl, false);
                                     if (match != null) {
                                         log(4, TAG, "Blocked View addition in " + pkgName + ". " + match);
                                         view.setVisibility(View.GONE);
@@ -103,7 +106,7 @@ public class PopupBlockerModule extends XposedModule {
                     Object result = chain.proceed();
 
                     if (window != null) {
-                        String match = checkBlock(window.getDecorView(), null);
+                        String match = checkBlock(window.getDecorView(), null, true);
                         if (match != null) {
                             log(4, TAG, "Blocked Dialog in " + pkgName + ". " + match);
                             dialog.dismiss();
@@ -141,15 +144,16 @@ public class PopupBlockerModule extends XposedModule {
         }
     }
 
-    private String checkBlock(View view, WindowManager.LayoutParams params) {
+    private String checkBlock(View view, WindowManager.LayoutParams params, boolean isExplicitDialog) {
         if (view == null) return null;
         SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
 
         if (prefs.getBoolean(KEY_AGGRESSIVE, false)) {
-            if (params != null && params.type >= 1000) {
-                return "Aggressive mode (Type " + params.type + ")";
-            } else if (params == null) {
-                return "Aggressive mode";
+            if (isExplicitDialog) {
+                return "Aggressive mode (Dialog)";
+            }
+            if (params != null && params.type >= 1000 && params.type <= 2999) {
+                return "Aggressive mode (Window Type " + params.type + ")";
             }
         }
 
@@ -209,9 +213,13 @@ public class PopupBlockerModule extends XposedModule {
     private Set<String> getPatterns() {
         try {
             SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
-            return prefs.getStringSet(KEY_PATTERNS, DEFAULT_PATTERNS);
+            if (prefs != null) {
+                Set<String> customPatterns = prefs.getStringSet(KEY_PATTERNS, DEFAULT_PATTERNS);
+                return customPatterns;
+            }
         } catch (Exception e) {
-            return DEFAULT_PATTERNS;
+            log(4, TAG, "Failed to read prefs: " + e.getMessage());
         }
+        return DEFAULT_PATTERNS;
     }
 }

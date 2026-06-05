@@ -9,6 +9,7 @@ import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.Toast;
 
+import java.io.File;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
@@ -58,6 +59,18 @@ public class SettingsActivity extends Activity {
                     .putStringSet(KEY_PATTERNS, newPatterns)
                     .putBoolean(KEY_AGGRESSIVE, aggressiveCheckbox.isChecked())
                     .apply();
+
+            // FIX: Make the file readable by the Xposed module across processes
+            try {
+                File prefsFile = new File(getApplicationInfo().dataDir, "shared_prefs/" + PREFS_NAME + ".xml");
+                if (prefsFile.exists()) {
+                    prefsFile.setReadable(true, false);
+                    prefsFile.setExecutable(true, false);
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
             Toast.makeText(this, "Settings saved", Toast.LENGTH_SHORT).show();
         });
     }
