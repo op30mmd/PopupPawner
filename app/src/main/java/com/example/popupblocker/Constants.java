@@ -21,5 +21,12 @@ public class Constants {
             "save", "login", "search"
     ));
 
-    public static final String AUTHORITY = "com.example.popupblocker.settings";
+    public static final String ACTION_CONFIG_PUSH = "com.example.popupblocker.CONFIG_PUSH";
+    public static final String CACHE_FILE = "popup_blocker_cache.json";
+    public static final String EX_PATTERNS = "patterns";
+    public static final String EX_WHITELIST = "whitelist";
+    public static final String EX_AGGRESSIVE = "aggressive";
+    public static final String EX_ENABLED = "enabled";
+    public static final String EX_DIAGNOSTICS = "diagnostics";
+    public static final String EX_VERSION = "configVersion";
 }

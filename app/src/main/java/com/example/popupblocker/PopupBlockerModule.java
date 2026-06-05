@@ -1,8 +1,13 @@
 package com.example.popupblocker;
 
+import android.app.Application;
 import android.app.Dialog;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
@@ -16,6 +21,13 @@ import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -48,16 +60,17 @@ public class PopupBlockerModule extends XposedModule {
             return;
         }
 
-        if ("android".equals(pkgName)) {
-            installVisibilityHook(param.getDefaultClassLoader());
-            return;
-        }
-
         log(4, TAG, "Module active in process: " + pkgName);
 
         try {
             ClassLoader classLoader = param.getDefaultClassLoader();
             installWindowDiagnostics(classLoader, pkgName);
+
+            hook(Application.class.getDeclaredMethod("onCreate")).intercept(chain -> {
+                Object res = chain.proceed();
+                try { initConfigSync((Application) chain.getThisObject()); } catch (Throwable ignored) {}
+                return res;
+            });
 
             hookDialogShow(classLoader, pkgName);
             hookPopupWindow(classLoader, pkgName);
@@ -158,47 +171,91 @@ public class PopupBlockerModule extends XposedModule {
         return false;
     }
 
-    private volatile Bundle configCache;
-    private volatile Context appContext;
+    private volatile Bundle liveConfig;
+    private volatile boolean syncInited = false;
 
-    private Context getAppContext() {
-        if (appContext != null) return appContext;
-        try {
-            Class<?> at = Class.forName("android.app.ActivityThread");
-            Object app = at.getMethod("currentApplication").invoke(null);
-            if (app != null) appContext = (Context) app;
-        } catch (Throwable t) {
-            log(4, TAG, "getAppContext failed: " + t);
+    private void initConfigSync(Context ctx) {
+        if (syncInited) return;
+        syncInited = true;
+
+        liveConfig = readCache(ctx);
+
+        BroadcastReceiver r = new BroadcastReceiver() {
+            @Override public void onReceive(Context c, Intent i) {
+                Bundle b = new Bundle();
+                b.putStringArrayList("patterns",  i.getStringArrayListExtra(EX_PATTERNS));
+                b.putStringArrayList("whitelist", i.getStringArrayListExtra(EX_WHITELIST));
+                b.putBoolean("aggressive", i.getBooleanExtra(EX_AGGRESSIVE, false));
+                b.putBoolean("enabled",    i.getBooleanExtra(EX_ENABLED, true));
+                b.putBoolean("diagnostics", i.getBooleanExtra(EX_DIAGNOSTICS, false));
+                b.putLong("configVersion", i.getLongExtra(EX_VERSION, 0));
+                liveConfig = b;
+                writeCache(c, b);
+                log(4, TAG, "Config push received, version=" + b.getLong("configVersion", 0));
+            }
+        };
+        IntentFilter filter = new IntentFilter(ACTION_CONFIG_PUSH);
+        if (Build.VERSION.SDK_INT >= 33) {
+            ctx.registerReceiver(r, filter, Context.RECEIVER_EXPORTED);
+        } else {
+            ctx.registerReceiver(r, filter);
         }
-        return appContext;
     }
 
-    private Bundle getConfig() {
-        Context ctx = getAppContext();
-        if (ctx == null) return configCache;
+    private Bundle readCache(Context ctx) {
         try {
-            Bundle b = ctx.getContentResolver().call(
-                    Uri.parse("content://" + AUTHORITY),
-                    "getConfig", null, null);
-            if (b != null) configCache = b;
-        } catch (Throwable t) {
-            log(4, TAG, "getConfig failed: " + t);
-        }
-        return configCache;
+            File file = new File(ctx.getFilesDir(), CACHE_FILE);
+            if (!file.exists()) return null;
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            try (FileInputStream in = new FileInputStream(file)) {
+                byte[] buf = new byte[4096]; int n;
+                while ((n = in.read(buf)) != -1) bos.write(buf, 0, n);
+            }
+            JSONObject o = new JSONObject(new String(bos.toByteArray(), "UTF-8"));
+            Bundle b = new Bundle();
+            b.putStringArrayList("patterns",  toList(o.optJSONArray("patterns")));
+            b.putStringArrayList("whitelist", toList(o.optJSONArray("whitelist")));
+            b.putBoolean("aggressive", o.optBoolean("aggressive", false));
+            b.putBoolean("enabled",    o.optBoolean("enabled", true));
+            b.putBoolean("diagnostics", o.optBoolean("diagnostics", false));
+            b.putLong("configVersion", o.optLong("configVersion", 0));
+            return b;
+        } catch (Throwable t) { log(4, TAG, "readCache failed: " + t); return null; }
+    }
+
+    private void writeCache(Context ctx, Bundle b) {
+        try {
+            JSONObject o = new JSONObject();
+            o.put("patterns",  new JSONArray(b.getStringArrayList("patterns")));
+            o.put("whitelist", new JSONArray(b.getStringArrayList("whitelist")));
+            o.put("aggressive", b.getBoolean("aggressive", false));
+            o.put("enabled",    b.getBoolean("enabled", true));
+            o.put("diagnostics", b.getBoolean("diagnostics", false));
+            o.put("configVersion", b.getLong("configVersion", 0));
+            try (FileOutputStream out = new FileOutputStream(new File(ctx.getFilesDir(), CACHE_FILE))) {
+                out.write(o.toString().getBytes("UTF-8"));
+            }
+        } catch (Throwable t) { log(4, TAG, "writeCache failed: " + t); }
+    }
+
+    private ArrayList<String> toList(JSONArray a) {
+        ArrayList<String> l = new ArrayList<>();
+        if (a != null) for (int i = 0; i < a.length(); i++) l.add(a.optString(i));
+        return l;
     }
 
     private String checkBlock(View view, WindowManager.LayoutParams params, boolean isExplicitDialog) {
         if (view == null) return null;
 
-        Bundle config = getConfig();
-        if (config == null) return null;
+        Bundle config = liveConfig;
 
-        if (!config.getBoolean("enabled", true)) return null;
+        boolean enabled = (config == null) ? true : config.getBoolean("enabled", true);
+        if (!enabled) return null;
 
-        boolean aggressive = config.getBoolean("aggressive", false);
-        List<String> patterns = config.getStringArrayList("patterns");
-        List<String> whitelist = config.getStringArrayList("whitelist");
-        long configVersion = config.getLong("configVersion", -1);
+        boolean aggressive = (config == null) ? false : config.getBoolean("aggressive", false);
+        List<String> patterns = (config == null) ? null : config.getStringArrayList("patterns");
+        List<String> whitelist = (config == null) ? null : config.getStringArrayList("whitelist");
+        long configVersion = (config == null) ? -1 : config.getLong("configVersion", -1);
 
         Set<String> patternSet = patterns != null ? new HashSet<>(patterns) : DEFAULT_PATTERNS;
         Set<String> whitelistSet = whitelist != null ? new HashSet<>(whitelist) : DEFAULT_WHITELIST;
@@ -319,7 +376,7 @@ public class PopupBlockerModule extends XposedModule {
                 if (!m.getName().equals("addView")) continue;
                 hook(m).intercept(chain -> {
                     try {
-                        Bundle config = getConfig();
+                        Bundle config = liveConfig;
                         if (config == null || !config.getBoolean("diagnostics", false)) {
                             return chain.proceed();
                         }
@@ -366,28 +423,4 @@ public class PopupBlockerModule extends XposedModule {
         return sb.toString();
     }
 
-    private void installVisibilityHook(ClassLoader cl) {
-        try {
-            Class<?> appsFilter = cl.loadClass("com.android.server.pm.AppsFilterBase");
-            for (Method m : appsFilter.getDeclaredMethods()) {
-                if (!m.getName().equals("shouldFilterApplication")) continue;
-                if (m.getParameterCount() != 5) continue;
-                hook(m).intercept(chain -> {
-                    try {
-                        Object target = chain.getArgs().get(3); // PackageStateInternal
-                        if (target != null) {
-                            String pkg = (String) target.getClass().getMethod("getPackageName").invoke(target);
-                            if ("com.example.popupblocker".equals(pkg)) {
-                                return false; // Do not filter -> module visible
-                            }
-                        }
-                    } catch (Throwable ignored) {}
-                    return chain.proceed();
-                });
-                log(4, TAG, "Hooked AppsFilterBase.shouldFilterApplication");
-            }
-        } catch (Throwable t) {
-            log(4, TAG, "Visibility hook failed: " + t);
-        }
-    }
 }

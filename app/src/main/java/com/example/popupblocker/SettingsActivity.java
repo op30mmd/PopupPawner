@@ -2,6 +2,7 @@ package com.example.popupblocker;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.widget.Button;
@@ -9,7 +10,7 @@ import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.Toast;
 
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -48,17 +49,36 @@ public class SettingsActivity extends Activity {
         whitelistEdit.setText(joinSet(prefs.getStringSet(KEY_WHITELIST, DEFAULT_WHITELIST)));
 
         saveButton.setOnClickListener(v -> {
-            openPrefs().edit()
-                    .putBoolean(KEY_ENABLED, enabledCheckbox.isChecked())
-                    .putStringSet(KEY_PATTERNS, new HashSet<>(splitString(patternsEdit.getText().toString())))
-                    .putStringSet(KEY_WHITELIST, new HashSet<>(splitString(whitelistEdit.getText().toString())))
-                    .putBoolean(KEY_AGGRESSIVE, aggressiveCheckbox.isChecked())
-                    .putBoolean(KEY_DIAGNOSTICS, diagnosticsCheckbox.isChecked())
-                    .putLong(KEY_CONFIG_VERSION, System.currentTimeMillis())
-                    .apply();
+            Set<String> patterns = splitString(patternsEdit.getText().toString());
+            Set<String> whitelist = splitString(whitelistEdit.getText().toString());
+            saveAndPush(patterns, whitelist, aggressiveCheckbox.isChecked(),
+                    enabledCheckbox.isChecked(), diagnosticsCheckbox.isChecked());
 
             Toast.makeText(this, "Settings saved", Toast.LENGTH_SHORT).show();
         });
+    }
+
+    private void saveAndPush(Set<String> patterns, Set<String> whitelist,
+                             boolean aggressive, boolean enabled, boolean diagnostics) {
+        long version = System.currentTimeMillis();
+        openPrefs().edit()
+                .putBoolean(KEY_ENABLED, enabled)
+                .putStringSet(KEY_PATTERNS, new HashSet<>(patterns))
+                .putStringSet(KEY_WHITELIST, new HashSet<>(whitelist))
+                .putBoolean(KEY_AGGRESSIVE, aggressive)
+                .putBoolean(KEY_DIAGNOSTICS, diagnostics)
+                .putLong(KEY_CONFIG_VERSION, version)
+                .apply();
+
+        Intent i = new Intent(ACTION_CONFIG_PUSH);
+        i.setPackage(null); // Explicitly implicit
+        i.putStringArrayListExtra(EX_PATTERNS, new ArrayList<>(patterns));
+        i.putStringArrayListExtra(EX_WHITELIST, new ArrayList<>(whitelist));
+        i.putExtra(EX_AGGRESSIVE, aggressive);
+        i.putExtra(EX_ENABLED, enabled);
+        i.putExtra(EX_DIAGNOSTICS, diagnostics);
+        i.putExtra(EX_VERSION, version);
+        sendBroadcast(i);
     }
 
     private String joinSet(Set<String> set) {
