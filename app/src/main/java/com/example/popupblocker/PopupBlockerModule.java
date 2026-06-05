@@ -66,8 +66,12 @@ public class PopupBlockerModule extends XposedModule {
 
                     if (params instanceof WindowManager.LayoutParams) {
                         WindowManager.LayoutParams wl = (WindowManager.LayoutParams) params;
-                        // Only target sub-windows (dialogs, panels, popups)
-                        if (wl.type >= 1000 && wl.type <= 2999) {
+                        // Target application windows (types 1, 2) and sub-windows/panels (types 1000-2999)
+                        boolean isCandidate = wl.type == WindowManager.LayoutParams.TYPE_APPLICATION
+                                || wl.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION
+                                || (wl.type >= 1000 && wl.type <= 2999);
+
+                        if (isCandidate) {
                             view.setAlpha(0f); // Hide until scanned
                             view.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
                                 @Override
@@ -78,7 +82,12 @@ public class PopupBlockerModule extends XposedModule {
                                     String match = checkBlock(view, wl, false);
                                     if (match != null) {
                                         log(4, TAG, "Blocked View addition in " + pkgName + ". " + match);
-                                        view.setVisibility(View.GONE);
+                                        try {
+                                            WindowManager wm = (WindowManager) view.getContext().getSystemService(android.content.Context.WINDOW_SERVICE);
+                                            wm.removeViewImmediate(view);
+                                        } catch (Exception e) {
+                                            view.setVisibility(View.GONE);
+                                        }
                                     } else {
                                         view.setAlpha(1f);
                                     }
@@ -120,24 +129,6 @@ public class PopupBlockerModule extends XposedModule {
                 // Ignore
             }
 
-            // Hook Activity.onResume - catch Activity-based popups
-            try {
-                Class<?> activityClass = classLoader.loadClass("android.app.Activity");
-                Method onResume = activityClass.getDeclaredMethod("onResume");
-                hook(onResume).intercept(chain -> {
-                    Activity activity = (Activity) chain.getThisObject();
-                    Object result = chain.proceed();
-
-                    String match = findBlockedText(activity.getWindow().getDecorView(), getPatterns());
-                    if (match != null) {
-                        log(4, TAG, "Blocked Activity popup in " + pkgName + ". " + match);
-                        activity.finish();
-                    }
-                    return result;
-                });
-            } catch (NoSuchMethodException | ClassNotFoundException e) {
-                // Ignore
-            }
 
         } catch (Exception e) {
             log(4, TAG, "Error in onPackageLoaded: " + e.getMessage());
@@ -194,8 +185,16 @@ public class PopupBlockerModule extends XposedModule {
         if (view instanceof TextView) {
             CharSequence text = ((TextView) view).getText();
             if (text != null) {
+                String content = text.toString();
                 for (String p : patterns) {
-                    if (text.toString().toLowerCase().contains(p.toLowerCase())) return "Recursive text match: " + p;
+                    try {
+                        if (java.util.regex.Pattern.compile("\\b" + java.util.regex.Pattern.quote(p) + "\\b",
+                                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(content).find()) {
+                            return "Recursive text match: " + p;
+                        }
+                    } catch (Exception e) {
+                        if (content.toLowerCase().contains(p.toLowerCase())) return "Fallback text match: " + p;
+                    }
                 }
             }
         }
