@@ -175,7 +175,7 @@ public class PopupBlockerModule extends XposedModule {
     private volatile boolean syncInited = false;
 
     private void initConfigSync(Context ctx) {
-        if (syncInited) return;
+        if (syncInited || ctx == null) return;
         syncInited = true;
 
         liveConfig = readCache(ctx);
@@ -200,6 +200,8 @@ public class PopupBlockerModule extends XposedModule {
         } else {
             ctx.registerReceiver(r, filter);
         }
+        log(4, TAG, "Config sync init. cache=" + (liveConfig != null)
+                + ", version=" + (liveConfig == null ? -1 : liveConfig.getLong("configVersion", 0)));
     }
 
     private Bundle readCache(Context ctx) {
@@ -244,8 +246,22 @@ public class PopupBlockerModule extends XposedModule {
         return l;
     }
 
+    private Context getAppContext() {
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object app = at.getMethod("currentApplication").invoke(null);
+            return (Context) app;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     private String checkBlock(View view, WindowManager.LayoutParams params, boolean isExplicitDialog) {
         if (view == null) return null;
+
+        if (!syncInited) {
+            initConfigSync(getAppContext());
+        }
 
         Bundle config = liveConfig;
 
