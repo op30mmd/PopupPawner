@@ -1,11 +1,16 @@
 package com.example.popupblocker;
 
-import android.app.Activity;
+import android.app.Application;
 import android.app.Dialog;
-import android.content.SharedPreferences;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -16,40 +21,34 @@ import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import static com.example.popupblocker.Constants.*;
+
 public class PopupBlockerModule extends XposedModule {
 
-    private static final String TAG = "PopupBlocker";
-    private static final String PREFS_NAME = "popup_blocker_prefs";
-    private static final String KEY_ENABLED = "module_enabled";
-    private static final String KEY_PATTERNS = "blocked_patterns";
-    private static final String KEY_WHITELIST = "whitelist_patterns";
-    private static final String KEY_AGGRESSIVE = "aggressive_mode";
-    private static final String KEY_DIAGNOSTICS = "verbose_diagnostics";
-
-    private static final Set<String> DEFAULT_PATTERNS = new HashSet<>(Arrays.asList(
-            "update", "rating", "survey", "ad", "commercial", "promotion"
-    ));
-    private static final Set<String> DEFAULT_WHITELIST = new HashSet<>(Arrays.asList(
-            "save", "login", "search"
-    ));
-
-    public PopupBlockerModule(XposedInterface base, XposedModuleInterface.ModuleLoadedParam param) {
+    /**
+     * No-argument constructor required by LibXposed (v101.0.1) for reflective instantiation.
+     */
+    public PopupBlockerModule() {
         super();
-        attachFramework(base);
-        log(4, TAG, "Module instantiated in " + param.getProcessName());
     }
 
     @Override
     public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
         super.onModuleLoaded(param);
-        log(4, TAG, "onModuleLoaded in " + param.getProcessName());
+        log(4, TAG, "Module loaded in " + param.getProcessName());
     }
 
     @Override
@@ -60,11 +59,18 @@ public class PopupBlockerModule extends XposedModule {
         if (pkgName.equals("com.example.popupblocker")) {
             return;
         }
+
         log(4, TAG, "Module active in process: " + pkgName);
 
         try {
             ClassLoader classLoader = param.getDefaultClassLoader();
             installWindowDiagnostics(classLoader, pkgName);
+
+            hook(Application.class.getDeclaredMethod("onCreate")).intercept(chain -> {
+                Object res = chain.proceed();
+                try { initConfigSync((Application) chain.getThisObject()); } catch (Throwable ignored) {}
+                return res;
+            });
 
             hookDialogShow(classLoader, pkgName);
             hookPopupWindow(classLoader, pkgName);
@@ -165,21 +171,116 @@ public class PopupBlockerModule extends XposedModule {
         return false;
     }
 
+    private volatile Bundle liveConfig;
+    private volatile boolean syncInited = false;
+
+    private void initConfigSync(Context ctx) {
+        if (syncInited || ctx == null) return;
+        syncInited = true;
+
+        liveConfig = readCache(ctx);
+
+        BroadcastReceiver r = new BroadcastReceiver() {
+            @Override public void onReceive(Context c, Intent i) {
+                Bundle b = new Bundle();
+                b.putStringArrayList("patterns",  i.getStringArrayListExtra(EX_PATTERNS));
+                b.putStringArrayList("whitelist", i.getStringArrayListExtra(EX_WHITELIST));
+                b.putBoolean("aggressive", i.getBooleanExtra(EX_AGGRESSIVE, false));
+                b.putBoolean("enabled",    i.getBooleanExtra(EX_ENABLED, true));
+                b.putBoolean("diagnostics", i.getBooleanExtra(EX_DIAGNOSTICS, false));
+                b.putLong("configVersion", i.getLongExtra(EX_VERSION, 0));
+                liveConfig = b;
+                writeCache(c, b);
+                log(4, TAG, "Config push received, version=" + b.getLong("configVersion", 0));
+            }
+        };
+        IntentFilter filter = new IntentFilter(ACTION_CONFIG_PUSH);
+        if (Build.VERSION.SDK_INT >= 33) {
+            ctx.registerReceiver(r, filter, Context.RECEIVER_EXPORTED);
+        } else {
+            ctx.registerReceiver(r, filter);
+        }
+        log(4, TAG, "Config sync init. cache=" + (liveConfig != null)
+                + ", version=" + (liveConfig == null ? -1 : liveConfig.getLong("configVersion", 0)));
+    }
+
+    private Bundle readCache(Context ctx) {
+        try {
+            File file = new File(ctx.getFilesDir(), CACHE_FILE);
+            if (!file.exists()) return null;
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            try (FileInputStream in = new FileInputStream(file)) {
+                byte[] buf = new byte[4096]; int n;
+                while ((n = in.read(buf)) != -1) bos.write(buf, 0, n);
+            }
+            JSONObject o = new JSONObject(new String(bos.toByteArray(), "UTF-8"));
+            Bundle b = new Bundle();
+            b.putStringArrayList("patterns",  toList(o.optJSONArray("patterns")));
+            b.putStringArrayList("whitelist", toList(o.optJSONArray("whitelist")));
+            b.putBoolean("aggressive", o.optBoolean("aggressive", false));
+            b.putBoolean("enabled",    o.optBoolean("enabled", true));
+            b.putBoolean("diagnostics", o.optBoolean("diagnostics", false));
+            b.putLong("configVersion", o.optLong("configVersion", 0));
+            return b;
+        } catch (Throwable t) { log(4, TAG, "readCache failed: " + t); return null; }
+    }
+
+    private void writeCache(Context ctx, Bundle b) {
+        try {
+            JSONObject o = new JSONObject();
+            o.put("patterns",  new JSONArray(b.getStringArrayList("patterns")));
+            o.put("whitelist", new JSONArray(b.getStringArrayList("whitelist")));
+            o.put("aggressive", b.getBoolean("aggressive", false));
+            o.put("enabled",    b.getBoolean("enabled", true));
+            o.put("diagnostics", b.getBoolean("diagnostics", false));
+            o.put("configVersion", b.getLong("configVersion", 0));
+            try (FileOutputStream out = new FileOutputStream(new File(ctx.getFilesDir(), CACHE_FILE))) {
+                out.write(o.toString().getBytes("UTF-8"));
+            }
+        } catch (Throwable t) { log(4, TAG, "writeCache failed: " + t); }
+    }
+
+    private ArrayList<String> toList(JSONArray a) {
+        ArrayList<String> l = new ArrayList<>();
+        if (a != null) for (int i = 0; i < a.length(); i++) l.add(a.optString(i));
+        return l;
+    }
+
+    private Context getAppContext() {
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object app = at.getMethod("currentApplication").invoke(null);
+            return (Context) app;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     private String checkBlock(View view, WindowManager.LayoutParams params, boolean isExplicitDialog) {
         if (view == null) return null;
-        SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
-        reloadPrefs(prefs);
 
-        if (!prefs.getBoolean(KEY_ENABLED, true)) return null;
+        if (!syncInited) {
+            initConfigSync(getAppContext());
+        }
 
-        boolean aggressive = prefs.getBoolean(KEY_AGGRESSIVE, false);
-        Set<String> patterns = getPatterns(prefs, KEY_PATTERNS, DEFAULT_PATTERNS);
-        Set<String> whitelist = getPatterns(prefs, KEY_WHITELIST, DEFAULT_WHITELIST);
+        Bundle config = liveConfig;
 
-        log(4, TAG, "Scanning view. Patterns: " + patterns.size() + ", Whitelist: " + whitelist.size() + ", Aggressive: " + aggressive);
+        boolean enabled = (config == null) ? true : config.getBoolean("enabled", true);
+        if (!enabled) return null;
+
+        boolean aggressive = (config == null) ? false : config.getBoolean("aggressive", false);
+        List<String> patterns = (config == null) ? null : config.getStringArrayList("patterns");
+        List<String> whitelist = (config == null) ? null : config.getStringArrayList("whitelist");
+        long configVersion = (config == null) ? -1 : config.getLong("configVersion", -1);
+
+        Set<String> patternSet = patterns != null ? new HashSet<>(patterns) : DEFAULT_PATTERNS;
+        Set<String> whitelistSet = whitelist != null ? new HashSet<>(whitelist) : DEFAULT_WHITELIST;
+
+        log(4, TAG, "Scanning view. Patterns: " + patternSet.size() + ", Whitelist: " + whitelistSet.size()
+                + ", Aggressive: " + aggressive + ", configVersion=" + configVersion);
 
         // 1. Whitelist Check (Highest priority)
-        String whiteMatch = findBlockedText(view, whitelist);
+        String whiteMatch = findBlockedText(view, whitelistSet);
         if (whiteMatch != null) {
             log(4, TAG, "Allowing view due to whitelist match: " + whiteMatch);
             return null;
@@ -197,7 +298,7 @@ public class PopupBlockerModule extends XposedModule {
         }
 
         // 3. Pattern Check
-        return findBlockedText(view, patterns);
+        return findBlockedText(view, patternSet);
     }
 
     private boolean isWholeWordMatch(String content, String pattern) {
@@ -291,8 +392,8 @@ public class PopupBlockerModule extends XposedModule {
                 if (!m.getName().equals("addView")) continue;
                 hook(m).intercept(chain -> {
                     try {
-                        SharedPreferences prefs = getRemotePreferences(PREFS_NAME);
-                        if (!prefs.getBoolean(KEY_DIAGNOSTICS, false)) {
+                        Bundle config = liveConfig;
+                        if (config == null || !config.getBoolean("diagnostics", false)) {
                             return chain.proceed();
                         }
 
@@ -306,6 +407,7 @@ public class PopupBlockerModule extends XposedModule {
                         }
                         log(4, TAG, "[WIN] pkg=" + pkg
                                 + " type=" + type
+                                + " configVersion=" + config.getLong("configVersion", -1)
                                 + " view=" + (v == null ? "null" : v.getClass().getName())
                                 + " text=" + dumpText(v, new StringBuilder(), 0));
                         // The caller chain is the answer: Dialog.show? PopupWindow? DialogFragment? custom?
@@ -337,23 +439,4 @@ public class PopupBlockerModule extends XposedModule {
         return sb.toString();
     }
 
-    private void reloadPrefs(SharedPreferences prefs) {
-        try {
-            // Reflective check for XSharedPreferences to pick up on-disk changes
-            Method reload = prefs.getClass().getMethod("reload");
-            reload.invoke(prefs);
-        } catch (Exception ignored) {}
-    }
-
-    private Set<String> getPatterns(SharedPreferences prefs, String key, Set<String> defaults) {
-        try {
-            if (prefs != null) {
-                Set<String> p = prefs.getStringSet(key, defaults);
-                return (p != null) ? p : defaults;
-            }
-        } catch (Exception e) {
-            log(4, TAG, "Failed to read patterns for " + key + ": " + e.getMessage());
-        }
-        return defaults;
-    }
 }

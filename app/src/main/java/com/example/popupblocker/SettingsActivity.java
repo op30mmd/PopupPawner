@@ -2,6 +2,7 @@ package com.example.popupblocker;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.widget.Button;
@@ -9,19 +10,13 @@ import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.Toast;
 
-import java.io.File;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Set;
 
-public class SettingsActivity extends Activity {
+import static com.example.popupblocker.Constants.*;
 
-    private static final String PREFS_NAME = "popup_blocker_prefs";
-    private static final String KEY_ENABLED = "module_enabled";
-    private static final String KEY_PATTERNS = "blocked_patterns";
-    private static final String KEY_WHITELIST = "whitelist_patterns";
-    private static final String KEY_AGGRESSIVE = "aggressive_mode";
-    private static final String KEY_DIAGNOSTICS = "verbose_diagnostics";
+public class SettingsActivity extends Activity {
 
     private CheckBox enabledCheckbox;
     private EditText patternsEdit;
@@ -30,12 +25,7 @@ public class SettingsActivity extends Activity {
     private CheckBox diagnosticsCheckbox;
 
     private SharedPreferences openPrefs() {
-        try {
-            // LSPosed bridges MODE_WORLD_READABLE to hooked processes
-            return getSharedPreferences(PREFS_NAME, Context.MODE_WORLD_READABLE);
-        } catch (SecurityException e) {
-            return getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        }
+        return getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
     }
 
     @Override
@@ -55,22 +45,50 @@ public class SettingsActivity extends Activity {
         aggressiveCheckbox.setChecked(prefs.getBoolean(KEY_AGGRESSIVE, false));
         diagnosticsCheckbox.setChecked(prefs.getBoolean(KEY_DIAGNOSTICS, false));
 
-        patternsEdit.setText(joinSet(prefs.getStringSet(KEY_PATTERNS,
-                new HashSet<>(Arrays.asList("update", "rating", "survey")))));
-        whitelistEdit.setText(joinSet(prefs.getStringSet(KEY_WHITELIST,
-                new HashSet<>(Arrays.asList("save", "login", "search")))));
+        patternsEdit.setText(joinSet(prefs.getStringSet(KEY_PATTERNS, DEFAULT_PATTERNS)));
+        whitelistEdit.setText(joinSet(prefs.getStringSet(KEY_WHITELIST, DEFAULT_WHITELIST)));
 
         saveButton.setOnClickListener(v -> {
-            openPrefs().edit()
-                    .putBoolean(KEY_ENABLED, enabledCheckbox.isChecked())
-                    .putStringSet(KEY_PATTERNS, splitString(patternsEdit.getText().toString()))
-                    .putStringSet(KEY_WHITELIST, splitString(whitelistEdit.getText().toString()))
-                    .putBoolean(KEY_AGGRESSIVE, aggressiveCheckbox.isChecked())
-                    .putBoolean(KEY_DIAGNOSTICS, diagnosticsCheckbox.isChecked())
-                    .apply();
+            save(splitString(patternsEdit.getText().toString()),
+                 splitString(whitelistEdit.getText().toString()),
+                 aggressiveCheckbox.isChecked(),
+                 enabledCheckbox.isChecked(),
+                 diagnosticsCheckbox.isChecked());
 
             Toast.makeText(this, "Settings saved", Toast.LENGTH_SHORT).show();
         });
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        pushCurrentConfig(this);
+    }
+
+    private void save(Set<String> patterns, Set<String> whitelist,
+                      boolean aggressive, boolean enabled, boolean diagnostics) {
+        openPrefs().edit()
+                .putBoolean(KEY_ENABLED, enabled)
+                .putStringSet(KEY_PATTERNS, new HashSet<>(patterns))
+                .putStringSet(KEY_WHITELIST, new HashSet<>(whitelist))
+                .putBoolean(KEY_AGGRESSIVE, aggressive)
+                .putBoolean(KEY_DIAGNOSTICS, diagnostics)
+                .putLong(KEY_CONFIG_VERSION, System.currentTimeMillis())
+                .apply();
+        pushCurrentConfig(this);
+    }
+
+    public static void pushCurrentConfig(Context ctx) {
+        SharedPreferences p = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        Intent i = new Intent(ACTION_CONFIG_PUSH);
+        i.setPackage(null); // Explicitly implicit
+        i.putStringArrayListExtra(EX_PATTERNS, new ArrayList<>(p.getStringSet(KEY_PATTERNS, DEFAULT_PATTERNS)));
+        i.putStringArrayListExtra(EX_WHITELIST, new ArrayList<>(p.getStringSet(KEY_WHITELIST, DEFAULT_WHITELIST)));
+        i.putExtra(EX_AGGRESSIVE, p.getBoolean(KEY_AGGRESSIVE, false));
+        i.putExtra(EX_ENABLED, p.getBoolean(KEY_ENABLED, true));
+        i.putExtra(EX_DIAGNOSTICS, p.getBoolean(KEY_DIAGNOSTICS, false));
+        i.putExtra(EX_VERSION, p.getLong(KEY_CONFIG_VERSION, 0));
+        ctx.sendBroadcast(i);
     }
 
     private String joinSet(Set<String> set) {
